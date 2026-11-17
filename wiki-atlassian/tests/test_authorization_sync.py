@@ -68,6 +68,27 @@ def test_warm_start_reuses_complete_inventory_only_after_live_root_admission(tmp
         denied.close()
 
 
+def test_retrieval_batches_stay_in_one_admitted_space_and_do_not_fetch_native(tmp_path):
+    native, _, _, _, manager = connected(tmp_path)
+    try:
+        count = len(native.calls)
+        args = {'space': 'DOC', 'root': '10', 'queries': ['Original', '11']}
+        search = manager.execute('search_documents', args)
+        groups = search['groups']
+        assert [row['query'] for row in groups] == args['queries']
+        locators = [group['results'][0]['read'] for group in groups]
+        assert all(row['space'] == 'DOC' for row in locators)
+        result = manager.execute('get_document', {'space': 'DOC', 'reads': locators})
+        assert [row['content'] for row in result['documents']] == [group['results'][0]['excerpt'] for group in groups]
+        assert manager.execute('search_documents', dict(args, root='20'))['code'] == 'scope_outside_connection'
+        assert manager.execute('get_document', {'reads': locators})['code'] == 'selection_required'
+        mixed = [*locators, dict(document='21', space='OTHER')]
+        assert manager.execute('get_document', {'space': 'DOC', 'reads': mixed})['code'] == 'space_mismatch'
+        assert len(native.calls) == count
+    finally:
+        manager.close()
+
+
 def test_expired_root_snapshot_is_not_exposed_during_initial_admission(tmp_path):
     native, _, project, remote, previous = connected(tmp_path)
     replica = previous.slots['DOC'].replica

@@ -50,7 +50,10 @@ class Query:
         self.terms = [_pattern(word) for word in dict.fromkeys(words)]
 
     def match(self, title, content):
-        title_n, body = unicodedata.normalize('NFC', title), unicodedata.normalize('NFC', content)
+        return self.match_projection(unicodedata.normalize('NFC', title), content, unicodedata.normalize('NFC', content))
+
+    def match_projection(self, title_n, content, body):
+        """Rank a prepared projection and return offsets in its original text."""
         title_terms = [bool(p.search(title_n)) for p in self.terms]
         phrase_body = self.phrase.search(body)
         starts = [m.start() if (m := p.search(body)) else -1 for p in self.terms]

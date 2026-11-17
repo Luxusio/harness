@@ -254,6 +254,9 @@ class MultiSpaceKnowledge:
             supplied = data.get('space')
             require(supplied is None or supplied in self.slots, 'invalid_request', 'Select a configured space key')
             arguments = {k: v for k, v in data.items() if k != 'space'}
+            if ((operation == 'search_documents' and 'queries' in arguments)
+                or (operation == 'get_document' and 'reads' in arguments)):
+                return self._retrieve_batch(operation, arguments, supplied)
             if operation == 'search_documents':
                 with self.remote.operation(timeout=45):
                     return self._search(arguments, supplied)
@@ -313,6 +316,24 @@ class MultiSpaceKnowledge:
         if isinstance(result.get('read'), dict):
             result['read'] = {**result['read'], 'space': key}
         return result
+
+    def _retrieve_batch(self, operation, arguments, space):
+        if space is None:
+            require(len(self.slots) == 1, 'selection_required', 'Select one configured project space for the batch')
+            space = next(iter(self.slots))
+        replica = self._running(space).replica
+        if operation == 'get_document':
+            reads = arguments['reads']
+            require(all(row.get('space', space) == space for row in reads), 'space_mismatch',
+                    'All evidence ranges must belong to the selected batch space')
+            response = replica.read_batch(reads)
+            if 'documents' in response:
+                response['documents'] = [self._label(row, space, True) for row in response['documents']]
+        else:
+            response = replica.search(arguments)
+            for group in response.get('groups', []):
+                group['results'] = [self._label(row, space, True) for row in group['results']]
+        return self._label(response, space)
 
     def _search(self, arguments, supplied):
         limit = arguments.get('limit', 10)

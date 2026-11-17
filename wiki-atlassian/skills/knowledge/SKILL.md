@@ -24,8 +24,12 @@ edit timestamp. A search snippet alone may omit exceptions.
 
 During development planning, start with focused searches under the configured
 wiki's current-document root when known. Reuse a guide already read at the same
-version in this session. Read exact search locators for the evidence you use,
-and expand only needed sections. For continued reads use the returned
+version in this session. Load related guide openings in one `get_document`
+call with `reads` items such as `{"document": "123", "length": 2000}`.
+Expand a guide when its details apply to the task. Pass related search terms
+as strings in `queries` under one space and root. Pass the relevant
+`read` locators together in `get_document`'s `reads` array to verify every
+range's version and snapshot. For continued reads use the returned
 `nextOffset` and exact version when `truncated` is true. A read is limited
 to 12,000 characters. Use `preferReplica: true` for current-version outlines
 or sections when the published snapshot is sufficient. A pending connection may synchronize in the background

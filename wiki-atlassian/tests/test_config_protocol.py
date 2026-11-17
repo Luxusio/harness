@@ -87,10 +87,46 @@ def test_public_tool_names_and_strict_types_are_preserved():
     for tool in SCHEMAS.values():
         assert tool['inputSchema']['additionalProperties'] is False
     assert validate_arguments('get_document', {'document': '42'})['length'] == 4000
+    assert validate_arguments('search_documents', {'query': 'guide'})['limit'] == 10
+    assert validate_arguments('search_documents', {'queries': ['guide', 'review']})['limit'] == 3
     assert validate_arguments('list_comments', {'target': '42'})['repliesPerComment'] == 3
     for args in ({'document': '42', 'version': True}, {'document': '42', 'version': None}, {'document': '42', 'ignore': True}, {}):
         with pytest.raises(Exception):
             validate_arguments('get_document', args)
+
+
+@pytest.mark.parametrize('tool_name,bad', [
+    ('search_documents', {'query': 'a', 'queries': ['a', 'b']}),
+    ('search_documents', {'queries': ['a', 2]}),
+    ('search_documents', {'queries': []}),
+    ('search_documents', {'queries': ['a'], 'cursor': 'single-only'}),
+    ('get_document', {'reads': [{'document': '42', 'version': True}]}),
+    ('get_document', {'reads': [{'document': '42', 'connection': 'personal'}]}),
+    ('get_document', {'reads': [{'document': '42', 'metadata': True}]}),
+    ('get_document', {'reads': [{'document': '42', 'length': 12000}] * 3}),
+    ('get_document', {'reads': [{'document': '42'}], 'length': 4}),
+    ('get_document', {'reads': [{'document': '42'}], 'connection': 'personal'}),
+])
+def test_retrieval_batch_validates_alternatives_and_nested_arguments(tool_name, bad):
+    from wiki_atlassian.models import RemoteError
+    with pytest.raises(RemoteError):
+        validate_arguments(tool_name, bad)
+
+
+@pytest.mark.parametrize('name,arguments,hint', [
+    ('get_document', {'reads': [{'pageId': 'private-value'}]}, 'arguments.reads[0].document'),
+    ('get_document', {'private-key': 'private-value'}, 'document or reads'),
+    ('get_document', {'document': '42', 'private-key': 'private-value'}, 'Allowed fields at arguments'),
+    ('search_documents', {'queries': ['guide', {'query': 'private-value'}]}, 'arguments.queries[1] must have JSON type string'),
+])
+def test_retrieval_batch_reports_schema_paths_without_echoing_input(name, arguments, hint):
+    server = Server(documents=object())
+    response = server.handle({
+        'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': arguments},
+    })
+    assert response['error']['code'] == -32602
+    assert hint in response['error']['message']
+    assert 'private-' not in response['error']['message']
 
 
 def test_inert_private_and_invalid_project_expose_truthful_surfaces():

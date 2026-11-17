@@ -140,7 +140,9 @@ class Server:
         if method == 'initialize':
             instructions = ('Use atlassian MCP for the configured spaces. Shared replicas synchronize automatically; '
                             'do not edit replicas. Select an explicit space or native parent for new documents. '
-                            'Use precise search locators for reads. Deferred updates return a same-session ID; verify the outcome with operation_status. '
+                            'In one project space, batch related terms with search_documents {"queries": ["term", "ID"]}. '
+                            'For current guide openings or exact evidence, call get_document with {"reads": [{"document": "123", "length": 2000}]} or pass the returned read locators in reads. '
+                            'Deferred updates return a same-session ID; verify the outcome with operation_status. '
                             'Use the same tools with connection: personal for the separate privately configured page. '
                             'Discover its page ID with connection_status(connection: personal). Personal access covers that exact page and its comments, never descendants. '
                             'Omitting connection selects project; unavailable connections never borrow credentials.')
@@ -157,8 +159,8 @@ class Server:
             return self.error(id, -32602, 'Unknown or unavailable tool')
         try:
             args = validate_arguments(name, args)
-        except RemoteError:
-            return self.error(id, -32602, 'Tool arguments do not match the declared schema')
+        except RemoteError as error:
+            return self.error(id, -32602, str(error))
         try:
             connection = args.pop('connection', None)
             if name == 'operation_status':

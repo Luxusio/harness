@@ -515,6 +515,10 @@ def test_actual_packaged_payload_captures_consuming_project_before_plugin_chdir(
         WIKI_ATLASSIAN_ENABLED="false", WIKI_ATLASSIAN_SITE="https://ignored.invalid"), command=command)
     tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
     assert {t["name"] for t in tools} == WIKI_TOOLS
+    schemas = {tool["name"]: tool["inputSchema"] for tool in tools}
+    assert schemas["search_documents"]["oneOf"] == [{"required": ["query"]}, {"required": ["queries"]}]
+    ranges = schemas["get_document"]["properties"]["reads"]
+    assert ranges["maxItems"] == 6 and ranges["items"]["required"] == ["document"]
     assert not list(nested.iterdir())
 
 

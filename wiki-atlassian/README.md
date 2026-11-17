@@ -167,6 +167,24 @@ body sweep. Known local publication failures trigger exact-page repair; after
 restart, a lost in-memory notification is recovered by the next due sweep,
 subject to service availability. Neither path repeats a remote mutation.
 
+For related questions in one project space, pass `queries` to
+`search_documents` and group the returned `read` locators in one
+`get_document` call. The search performs one bounded corpus scan, and the
+read batch checks each range against one admitted generation. For example:
+
+```json
+{"space":"TEAM","root":"456","queries":["approval policy","HD-57"],"limit":3}
+```
+
+`groups` follows the order of the queries. Each group reports whether
+additional hits exist. Use a single `query` for pagination. In
+`get_document`, pass `{"space":"TEAM","reads":[...]}` with the returned
+locators or current document IDs and lengths. The `documents` array follows
+request order and reports invalid or stale items individually. Each batch
+supports up to six entries. Search caps the total at 30 requested hits, and
+reads cap the total at 24,000 requested characters. Use single native reads
+for historical versions or detailed metadata.
+
 Whole-space synchronization uses paginated native batches for authorized
 document bodies and complete bulk metadata verification before publication.
 It does not require several metadata requests per document. ROOT connections

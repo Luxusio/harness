@@ -27,6 +27,7 @@ from . import changes
 from .models import Node, Page, RemoteError, compact_json, native_id
 from .references import native_page_url_id
 from .search import Query, Match, authored_start, projected_headings
+from .tools import MAX_BATCH_SEARCH_HITS, MAX_RETRIEVAL_BATCH
 
 BODY_LIMIT = 8 * 1024 * 1024
 MANIFEST_LIMIT = 16 * 1024 * 1024
@@ -547,63 +548,99 @@ class Replica:
     def _snapshot(self, id, row, markdown):
         return _hash(':'.join((self.search_identity, id, str(row['version']), row['bodyHash'], _hash(markdown))))
 
-    def get_document(self, data):
+    @staticmethod
+    def _read_locator(data):
         locator = data.get('snapshot')
         if 'snapshot' in data and (not isinstance(locator, str) or not changes.HASH.fullmatch(locator)
             or data.get('section') is not None or data.get('format', 'markdown') != 'markdown'
             or type(data.get('version')) is not int or data['version'] <= 0):
-            return self._error(RemoteError('invalid_snapshot', 'Use the search result Markdown arguments, snapshot and native version'))
-        section, format = data.get('section'), data.get('format', 'markdown')
-        native_range = section is not None or format == 'outline'
-        if native_range and (not data.get('preferReplica') or data.get('metadata')):
+            raise RemoteError('invalid_snapshot', 'Use the search result Markdown arguments, snapshot and native version')
+        return locator
+
+    def _read_range(self, data, manifest, locator, bodies):
+        id = self._page_id(data['document'])
+        if id in manifest.get('unavailable', []):
+            raise RemoteError('document_unavailable', 'The document was unavailable at last synchronization')
+        row = manifest['pages'].get(id)
+        if row is None:
+            raise RemoteError('document_not_found', 'Search the configured corpus for a current document ID')
+        expected = data.get('version')
+        if expected is not None and (type(expected) is not int or not 1 <= expected <= 2147483647):
+            raise RemoteError('invalid_query', 'Use an exact positive native version')
+        if expected is not None and expected != row['version']:
+            if locator is not None:
+                raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
             return None
+        section, format = data.get('section'), data.get('format', 'markdown')
+        if format not in ('markdown', 'storage', 'outline'):
+            raise RemoteError('invalid_query', 'Use Markdown, storage or outline format')
+        if section is not None and (expected is None or format == 'outline'):
+            raise RemoteError('invalid_section', 'Use a native section key and its exact published version')
+        # Cache only within this admitted generation and exact representation.
+        key = (id, format, section)
+        if key not in bodies:
+            if section is not None or format == 'outline':
+                from .storage import outline, storage_section, to_markdown
+                text = self._body(row, 'storage')
+                if section is not None:
+                    text = storage_section(text, section)
+                if format == 'outline':
+                    text = outline(text)
+                elif format == 'markdown':
+                    text = to_markdown(text, f'{self.settings.site}/wiki/spaces/{self.settings.space}/pages/{id}')
+            else:
+                text = self._body(row, format)
+            bodies[key] = text, None
+        text, digest = bodies[key]
+        if locator is not None:
+            if digest is None:
+                digest = self._snapshot(id, row, text)
+                bodies[key] = text, digest
+            if locator != digest:
+                raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
+        offset, length = data.get('offset', 0), data.get('length', 4000)
+        if (type(offset) is not int or type(length) is not int or not 0 <= offset <= len(text)
+            or not 1 <= length <= 12000 or (offset != 0 and expected is None)):
+            raise RemoteError('invalid_query', 'Continued reads require a version and bounded offset')
+        end = min(len(text), offset + length)
+        result = dict(id=id, title=row['title'], version=row['version'], format=format,
+                      content=text[offset:end], offset=offset, offsetUnit='unicode_code_points',
+                      truncated=end < len(text))
+        if section is not None:
+            result['section'] = section
+        if end < len(text):
+            result['nextOffset'] = end
+        if locator is not None:
+            result['snapshot'] = locator
+        return result
+
+    def get_document(self, data):
+        try:
+            locator = self._read_locator(data)
+            native_range = data.get('section') is not None or data.get('format') == 'outline'
+            if native_range and (not data.get('preferReplica') or data.get('metadata')):
+                return None
+            with self._locked_manifest() as manifest:
+                result = self._read_range(data, manifest, locator, {})
+                if result is not None:
+                    result['freshness'] = self._freshness(manifest)
+                return result
+        except Exception as error:
+            return self._error(error)
+
+    def read_batch(self, ranges):
         try:
             with self._locked_manifest() as manifest:
-                id = self._page_id(data['document'])
-                if id in manifest.get('unavailable', []):
-                    raise RemoteError('document_unavailable', 'The document was unavailable at last synchronization')
-                row = manifest['pages'].get(id)
-                if row is None:
-                    raise RemoteError('document_not_found', 'Search the configured corpus for a current document ID')
-                expected = data.get('version')
-                if expected is not None and (type(expected) is not int or not 1 <= expected <= 2147483647):
-                    raise RemoteError('invalid_query', 'Use an exact positive native version')
-                if expected is not None and expected != row['version']:
-                    if locator is not None:
-                        raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
-                    return None
-                if format not in ('markdown', 'storage', 'outline'):
-                    raise RemoteError('invalid_query', 'Use Markdown, storage or outline format')
-                if native_range:
-                    from .storage import outline, storage_section, to_markdown
-                    text = self._body(row, 'storage')
-                    if section is not None:
-                        if expected is None or format == 'outline':
-                            raise RemoteError('invalid_section', 'Use a native section key and its exact published version')
-                        text = storage_section(text, section)
-                    if format == 'outline':
-                        text = outline(text)
-                    elif format == 'markdown':
-                        text = to_markdown(text, f'{self.settings.site}/wiki/spaces/{self.settings.space}/pages/{id}')
-                else:
-                    text = self._body(row, format)
-                if locator is not None and locator != self._snapshot(id, row, text):
-                    raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
-                offset, length = data.get('offset', 0), data.get('length', 4000)
-                if (type(offset) is not int or type(length) is not int or not 0 <= offset <= len(text)
-                    or not 1 <= length <= 12000 or (offset != 0 and expected is None)):
-                    raise RemoteError('invalid_query', 'Continued reads require a version and bounded offset')
-                end = min(len(text), offset + length)
-                result = dict(id=id, title=row['title'], version=row['version'], format=format,
-                              content=text[offset:end], offset=offset, offsetUnit='unicode_code_points',
-                              truncated=end < len(text), freshness=self._freshness(manifest))
-                if section is not None:
-                    result['section'] = section
-                if end < len(text):
-                    result['nextOffset'] = end
-                if locator is not None:
-                    result['snapshot'] = locator
-                return result
+                bodies, documents = {}, []
+                for data in ranges:
+                    try:
+                        result = self._read_range(data, manifest, self._read_locator(data), bodies)
+                        if result is None:
+                            raise RemoteError('document_version_unavailable', 'The requested version is not the current replica; use a single native read')
+                    except Exception as error:
+                        result = self._error(error)
+                    documents.append(result)
+                return dict(documents=documents, freshness=self._freshness(manifest))
         except Exception as error:
             return self._error(error)
 
@@ -615,24 +652,33 @@ class Replica:
             return self._error(error)
 
     def _search(self, data, manifest):
-        if self.settings.page_only and 'cursor' in data:
-            raise RemoteError('invalid_cursor', 'Exact-page search has at most one result and no continuation')
-        query = data['query'].strip()
-        limit, snippet = data.get('limit', 10), data.get('snippetLength', 400)
-        if (not 1 <= len(query) <= 200 or type(limit) is not int or not 1 <= limit <= 25
+        batch = 'queries' in data
+        queries = data.get('queries', [data.get('query')])
+        limit, snippet = data.get('limit', 3 if batch else 10), data.get('snippetLength', 400)
+        cursor = data.get('cursor')
+        if cursor is not None and (batch or self.settings.page_only):
+            raise RemoteError('invalid_cursor', 'Continue only a single non-personal search')
+        if (not isinstance(queries, list) or not 1 <= len(queries) <= MAX_RETRIEVAL_BATCH
+            or any(not isinstance(query, str) or not 1 <= len(query.strip()) <= 200 for query in queries)
+            or type(limit) is not int or not 1 <= limit <= 25
             or type(snippet) is not int or not 1 <= snippet <= 500
-            or data.get('scope', 'effective') not in ('effective', 'common', 'project')):
-            raise RemoteError('invalid_query', 'Use 1..200 query characters, 1..25 results and 1..500 excerpt characters')
+            or data.get('scope', 'effective') not in ('effective', 'common', 'project')
+            or (batch and limit * len(queries) > MAX_BATCH_SEARCH_HITS)):
+            raise RemoteError('invalid_query', 'Use 1..200 query characters, bounded hits and 1..500 excerpt characters')
+        queries = [query.strip() for query in queries]
+        if len(set(queries)) != len(queries):
+            raise RemoteError('invalid_query', 'Batch queries must be distinct')
         root = self._page_id(data['root']) if data.get('root') is not None else None
-        binding = _hash('\0'.join((query, root or '', str(limit), str(snippet))))
-        cursor, after = data.get('cursor'), None
+        binding = _hash('\0'.join((queries[0], root or '', str(limit), str(snippet))))
+        after = None
         if cursor is not None:
             parts = cursor.split(':', 3)
             if (len(parts) != 4 or not changes.HASH.fullmatch(parts[0]) or parts[1] != binding
                 or not re.fullmatch('[1-6]', parts[2]) or not changes.ID.fullmatch(parts[3])):
                 raise RemoteError('snapshot_changed', 'Search snapshot changed; start a new search')
             after = (-int(parts[2]), parts[3])
-        pages, denied, folders = manifest['pages'], set(manifest.get('unavailable', [])), manifest.get('folderParents', {})
+        pages = manifest['pages']
+        denied, folders = set(manifest.get('unavailable', [])), manifest.get('folderParents', {})
 
         def inside(id):
             seen = set()
@@ -645,9 +691,12 @@ class Replica:
                 id = pages.get(id, {}).get('parentId', folders.get(id))
             return False
 
-        def hit(id, row, match, markdown):
-            prefix = authored_start(markdown)
-            at = prefix + match.body_offset if match.body_offset >= 0 else next((i for i in range(prefix, len(markdown)) if not markdown[i].isspace()), -1)
+        if batch and root is not None and (root not in pages and root not in folders or not inside(root)):
+            raise RemoteError('scope_outside_connection', 'The selected root is not available in this space')
+
+        def hit(id, row, match, markdown, prefix, snapshot):
+            at = prefix + match.body_offset if match.body_offset >= 0 else next(
+                (i for i in range(prefix, len(markdown)) if not markdown[i].isspace()), -1)
             result = dict(id=id, title=row['title'], version=row['version'], match=match.field)
             headings = None
             if at >= 0:
@@ -655,81 +704,110 @@ class Replica:
                 length = min(snippet, len(markdown)-start)
                 result.update(excerpt=markdown[start:start+length], excerptOnly=True,
                               read=dict(document=id, version=row['version'], format='markdown', offset=start,
-                                        length=length, snapshot=self._snapshot(id, row, markdown)))
+                                        length=length, snapshot=snapshot))
                 headings = projected_headings(markdown, prefix, at)
             return ((-match.rank, id), result, headings)
 
-        def response(hits, next=None):
-            results, remaining = [], 4 * 1024 * 1024
-            from .storage import native_headings, parse_storage
-            for _, result, projected in hits:
-                if projected:
-                    try:
-                        if remaining <= 0:
-                            raise ValueError('Heading verification budget')
-                        storage = self._body(pages[result['id']], 'storage', limit=min(BODY_LIMIT, remaining))
-                        size = len(storage.encode('utf-8'))
-                        if size > remaining:
-                            raise ValueError('Heading verification budget')
-                        remaining -= size
-                        native = native_headings(storage)
-                        outline = [(row['level'], row['text']) for row in native]
-                        native_starts = {row['start'] for row in native}
-                        containers = {'#document', '#root', 'div', 'section', 'article', 'ac:rich-text-body'}
-                        transparent = all(all(a.tag in containers for a in e.ancestors())
-                                          for e in parse_storage(storage).descendants() if e.start in native_starts)
-                        if outline == projected[0] and transparent:
-                            result['headingPath'] = projected[1]
-                    except (OSError, ValueError, RemoteError):
-                        pass
-                results.append(result)
-            result = dict(results=results, freshness=self._freshness(manifest), truncated=next is not None)
-            if next is not None:
-                result['nextCursor'] = next
-            return result
-
-        if changes.ID.fullmatch(query) and query in pages and inside(query):
-            if cursor is not None:
-                raise RemoteError('snapshot_changed', 'Search snapshot changed; start a new search')
-            return response([hit(query, pages[query], Match(0, 'native_id'), self._body(pages[query], 'markdown'))])
-        lexical, generation, hits, scanned_bytes, scanned_pages = Query(query), hashlib.sha256(), [], 0, 0
-        for id, row in sorted(pages.items()):
-            if not inside(id):
-                continue
-            scanned_pages += 1
-            # Size is only a refusal hint. The platform reader still verifies
-            # the actual file and enforces the remaining aggregate byte limit.
-            info = metadata_probe(self._path(row['path']))
-            if info is None:
-                raise RemoteError('replica_unavailable', 'A synchronized projection is missing')
-            size = info['size']
-            if size > BODY_LIMIT:
-                raise RemoteError('replica_unavailable', 'Replica projection is oversized; wait for synchronization')
-            if scanned_bytes + size > 64 * 1024 * 1024 or scanned_pages > 5000:
-                raise RemoteError('search_scope_too_large', 'Narrow the root or search an exact native page ID')
-            markdown = self._body(row, 'markdown', limit=min(BODY_LIMIT, 64*1024*1024-scanned_bytes))
-            scanned_bytes += len(markdown.encode('utf-8'))
-            projection = self._snapshot(id, row, markdown)
-            generation.update(projection.encode('utf-8'))
+        exact = {query for query in queries if changes.ID.fullmatch(query) and query in pages and inside(query)}
+        if cursor is not None and exact:
+            raise RemoteError('snapshot_changed', 'Search snapshot changed; start a new search')
+        lexical = {query: Query(query) for query in queries if query not in exact}
+        hits = {query: [] for query in queries}
+        generation = hashlib.sha256()
+        for id, row, markdown in self._scan_projections(pages, inside, exact if not lexical else None):
+            prefix = authored_start(markdown)
+            snapshot = self._snapshot(id, row, markdown)
+            generation.update(snapshot.encode('utf-8'))
             generation.update(compact_json(row['title']).encode('utf-8'))
             generation.update(b'\0')
-            match = lexical.match(row['title'], markdown[authored_start(markdown):])
-            if match is None or (after is not None and (-match.rank, id) <= after):
+            if id in exact:
+                hits[id].append(hit(id, row, Match(0, 'native_id'), markdown, prefix, snapshot))
+            if not lexical:
                 continue
-            candidate = hit(id, row, match, markdown)
-            # Only one response and a continuation witness remain resident.
-            if len(hits) <= limit or candidate[0] < hits[-1][0]:
-                hits.append(candidate)
-                hits.sort(key=lambda item: item[0])
-                del hits[limit+1:]
+            body = markdown[prefix:]
+            title_n, body_n = unicodedata.normalize('NFC', row['title']), unicodedata.normalize('NFC', body)
+            for query, matcher in lexical.items():
+                match = matcher.match_projection(title_n, body, body_n)
+                if match is None:
+                    continue
+                key = (-match.rank, id)
+                winners = hits[query]
+                if (after is not None and key <= after) or (len(winners) > limit and key >= winners[-1][0]):
+                    continue
+                winners.append(hit(id, row, match, markdown, prefix, snapshot))
+                winners.sort(key=lambda item: item[0])
+                del winners[limit+1:]
+
         digest = generation.hexdigest()
         if cursor is not None and parts[0] != digest:
             raise RemoteError('snapshot_changed', 'Search snapshot changed; start a new search')
-        continuation = None
-        if len(hits) > limit:
-            key = hits[limit-1][0]
-            continuation = f'{digest}:{binding}:{-key[0]}:{key[1]}'
-        return response(hits[:limit], continuation)
+        groups = self._search_groups(queries, hits, pages, limit)
+        freshness = self._freshness(manifest)
+        if batch:
+            return dict(groups=groups, freshness=freshness)
+        result = dict(groups[0], freshness=freshness)
+        result.pop('query')
+        if result['truncated']:
+            rank, id = hits[queries[0]][limit-1][0]
+            result['nextCursor'] = f'{digest}:{binding}:{-rank}:{id}'
+        return result
+
+    def _scan_projections(self, pages, inside, exact):
+        scanned_bytes, scanned_pages = 0, 0
+        for id in sorted(pages if exact is None else exact):
+            if not inside(id):
+                continue
+            row = pages[id]
+            scanned_pages += 1
+            # Size is a refusal hint. The platform reader still checks the
+            # file and enforces the remaining aggregate bound.
+            info = metadata_probe(self._path(row['path']))
+            if info is None:
+                raise RemoteError('replica_unavailable', 'A synchronized projection is missing')
+            if info['size'] > BODY_LIMIT:
+                raise RemoteError('replica_unavailable', 'Replica projection is oversized; wait for synchronization')
+            if scanned_bytes + info['size'] > 64 * 1024 * 1024 or scanned_pages > 5000:
+                raise RemoteError('search_scope_too_large', 'Narrow the root or search an exact native page ID')
+            markdown = self._body(row, 'markdown', limit=min(BODY_LIMIT, 64*1024*1024-scanned_bytes))
+            scanned_bytes += len(markdown.encode('utf-8'))
+            yield id, row, markdown
+
+    def _search_groups(self, queries, hits, pages, limit):
+        from .storage import native_headings, parse_storage
+        remaining, outlines = 4 * 1024 * 1024, {}
+        containers = {'#document', '#root', 'div', 'section', 'article', 'ac:rich-text-body'}
+
+        def native_outline(id):
+            nonlocal remaining
+            if id in outlines:
+                return outlines[id]
+            outlines[id] = None
+            if remaining <= 0:
+                return None
+            try:
+                storage = self._body(pages[id], 'storage', limit=min(BODY_LIMIT, remaining))
+                size = len(storage.encode('utf-8'))
+                if size > remaining:
+                    return None
+                remaining -= size
+                native = native_headings(storage)
+                starts = {row['start'] for row in native}
+                if all(all(a.tag in containers for a in e.ancestors())
+                       for e in parse_storage(storage).descendants() if e.start in starts):
+                    outlines[id] = [(row['level'], row['text']) for row in native]
+            except (OSError, ValueError, RemoteError):
+                pass
+            return outlines[id]
+
+        groups = []
+        for query in queries:
+            results = []
+            for _, result, projected in hits[query][:limit]:
+                if projected and native_outline(result['id']) == projected[0]:
+                    result['headingPath'] = projected[1]
+                results.append(result)
+            groups.append(dict(query=query, results=results, truncated=len(hits[query]) > limit))
+        return groups
 
     def _root_access(self):
         if self.settings.whole_space:

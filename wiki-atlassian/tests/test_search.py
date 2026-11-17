@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wiki_atlassian.search import Query, authored_start, projected_headings
@@ -58,6 +59,54 @@ class ReplicaSearchTests(unittest.TestCase):
     def metadata(self, name):
         import test_replica as fixtures
         return fixtures.ReplicaTests.metadata(self, name)
+
+    def test_batch_queries_reuse_one_scan_and_preserve_single_query_locators(self):
+        self.replica.synchronize()
+        queries = ['shared', 'evidence', '211']
+        expected = [self.replica.search(dict(query=query, limit=2))['results'] for query in queries]
+        with patch.object(self.replica, '_body', wraps=self.replica._body) as source:
+            response = self.replica.search(dict(queries=queries, limit=2))
+        self.assertEqual(queries, [row['query'] for row in response['groups']])
+        self.assertEqual(expected, [row['results'] for row in response['groups']])
+        markdown_reads = [call for call in source.call_args_list if call.args[1] == 'markdown']
+        native_reads = [call for call in source.call_args_list if call.args[1] == 'storage']
+        self.assertEqual(len(self.metadata('manifest.json')['pages']), len(markdown_reads))
+        self.assertEqual(1, len(native_reads))
+
+    def test_batch_reads_share_body_and_bind_each_exact_snapshot(self):
+        self.replica.synchronize()
+        hits = self.replica.search(dict(queries=['shared', 'evidence'], snippetLength=8))['groups']
+        locators = [row['results'][0]['read'] for row in hits]
+        self.assertEqual('211', locators[0]['document'])
+        self.assertNotEqual(locators[0]['offset'], locators[1]['offset'])
+        invalid = dict(locators[0], snapshot='f' * 64)
+        old = dict(document='211', version=9)
+        with patch.object(self.replica, '_body', wraps=self.replica._body) as source:
+            response = self.replica.read_batch([*locators, invalid, old])
+        first, second, forged, historical = response['documents']
+        self.assertEqual(1, source.call_count)
+        self.assertEqual([row['results'][0]['excerpt'] for row in hits], [first['content'], second['content']])
+        self.assertEqual('snapshot_changed', forged['code'])
+        self.assertEqual('document_version_unavailable', historical['code'])
+
+    def test_batch_search_and_reads_discard_all_results_after_revocation(self):
+        for operation, key in (
+            (lambda: self.replica.search(dict(queries=['shared', 'evidence'])), 'groups'),
+            (lambda: self.replica.read_batch([dict(document='210'), dict(document='211')]), 'documents'),
+        ):
+            with self.subTest(result=key):
+                self.replica.synchronize()
+                original = self.replica._body
+
+                def read_and_revoke(*args, **kwargs):
+                    text = original(*args, **kwargs)
+                    self.replica.deny()
+                    return text
+
+                with patch.object(self.replica, '_body', side_effect=read_and_revoke):
+                    response = operation()
+                self.assertEqual('root_scope_denied', response['code'])
+                self.assertNotIn(key, response)
 
     def test_multilingual_ranked_pages_return_original_snippet_and_verifiable_heading_path(self):
         from dataclasses import replace
