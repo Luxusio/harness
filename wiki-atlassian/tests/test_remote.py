@@ -1118,12 +1118,18 @@ def test_whole_space_drift_cannot_clear_late_denial_or_interrupted_publication(n
         state.pages['10']['title'] = 'Observed new title'
         original_stage, original_recover = replica._stage_page, replica._recover
         if failure_point == 'late_denial':
+            manifest = replica.control/'manifest.json'
+            published = manifest.read_bytes()
             sibling = Replica(settings, remote)
             def stage(*args):
                 sibling.deny()
                 return original_stage(*args)
             monkeypatch.setattr(replica, '_stage_page', stage)
-            replica.synchronize()
+            with pytest.raises(RemoteError) as failure:
+                replica.synchronize()
+            assert failure.value.code == 'replica_generation_changed'
+            assert manifest.read_bytes() == published
+            assert not (replica.control/'transaction.json').exists()
         else:
             def recover(*args, **kwargs):
                 if (replica.control/'transaction.json').exists():

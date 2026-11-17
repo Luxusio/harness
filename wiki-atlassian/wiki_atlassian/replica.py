@@ -220,7 +220,7 @@ class Replica:
         self.settings, self.remote = settings, remote
         self.base = settings.corpus_root / 'confluence' / settings.space
         self.control = self.base / '.sync'
-        self.pending_repair = set()
+        self.pending_repair = {}
         self.on_repair = None
         self.on_authorization_denied = None
         self.last_failure = None
@@ -229,6 +229,9 @@ class Replica:
         self._denial_pending = False
         self._denial_generation = 0
         self._state_lock = threading.Lock()
+        self._reader_lock = threading.Lock()
+        self._reader_count = 0
+        self._reader_lease = None
         self._sync_progress = ('idle', 0.0, 0, None)
         self._sync_started = None
         self.search_identity = _hash(str(settings.corpus_root) + '\0' + settings.space)
@@ -358,10 +361,29 @@ class Replica:
             raise RemoteError('invalid_mirror_snapshot', 'Synchronized mirror data is malformed; preserve it and rebuild the disposable mirror') from None
 
     @contextmanager
+    def _read_lease(self):
+        # The platform lock uses one OS handle per process. Share that handle
+        # across this replica's concurrent readers rather than reopening it.
+        with self._reader_lock:
+            if not self._reader_count:
+                lease = file_lock(self.control / 'sync.lock', shared=True)
+                lease.__enter__()
+                self._reader_lease = lease
+            self._reader_count += 1
+        try:
+            yield
+        finally:
+            with self._reader_lock:
+                self._reader_count -= 1
+                if not self._reader_count:
+                    self._reader_lease.__exit__(None, None, None)
+                    self._reader_lease = None
+
+    @contextmanager
     def _locked_manifest(self):
         identity = self.settings.identity()
         try:
-            with file_lock(self.control / 'sync.lock', shared=True):
+            with self._read_lease():
                 if self._exists(self.control / 'transaction.json'):
                     raise RemoteError('replica_recovery_pending', 'Automatic synchronization must finish the interrupted publication')
                 manifest = self._manifest()
@@ -386,6 +408,29 @@ class Replica:
             return self._read(self.control / 'state.json', 65536)
         except FileNotFoundError:
             return {}
+
+    def refresh_delay(self):
+        """Return time left on the shared verified sweep, or zero when due."""
+        with self._state_lock:
+            if self.pending_repair or self.last_failure:
+                return 0
+        try:
+            with self._locked_manifest() as manifest:
+                state = self._checkpoint()
+                if (state.get('cursor') != manifest['cursor']
+                    or state.get('credentialBinding') != self.settings.credential_fingerprint):
+                    return 0
+                stamp = state.get('bodyRefreshedAt')
+                now = int(time.time() * 1000)
+                interval = self.settings.poll_interval_seconds * 1000
+                if type(stamp) is not int or not 0 <= stamp <= now or any(
+                    changes.comment_due(manifest, id, now, interval)
+                    for id in self.settings.watched_comment_pages
+                ):
+                    return 0
+                return max(0, (stamp + interval - now) / 1000)
+        except (OSError, ValueError, RemoteError):
+            return 0
 
     def _freshness(self, manifest):
         timestamp = self._checkpoint().get('bodyRefreshedAt')
@@ -480,9 +525,10 @@ class Replica:
 
     def request_repair(self, id):
         native_id(id)
-        if len(self.pending_repair) >= 500 and id not in self.pending_repair:
-            raise RemoteError('replica_repair_limit', 'Wait for the pending replica repairs')
-        self.pending_repair.add(id)
+        with self._state_lock:
+            if len(self.pending_repair) >= 500 and id not in self.pending_repair:
+                raise RemoteError('replica_repair_limit', 'Wait for the pending replica repairs')
+            self.pending_repair[id] = object()
         if self.on_repair is not None:
             self.on_repair()
 
@@ -507,7 +553,9 @@ class Replica:
             or data.get('section') is not None or data.get('format', 'markdown') != 'markdown'
             or type(data.get('version')) is not int or data['version'] <= 0):
             return self._error(RemoteError('invalid_snapshot', 'Use the search result Markdown arguments, snapshot and native version'))
-        if locator is None and (data.get('section') is not None or data.get('format') == 'outline'):
+        section, format = data.get('section'), data.get('format', 'markdown')
+        native_range = section is not None or format == 'outline'
+        if native_range and (not data.get('preferReplica') or data.get('metadata')):
             return None
         try:
             with self._locked_manifest() as manifest:
@@ -524,10 +572,21 @@ class Replica:
                     if locator is not None:
                         raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
                     return None
-                format = data.get('format', 'markdown')
-                if format not in ('markdown', 'storage'):
-                    raise RemoteError('invalid_query', 'Use Markdown or storage format')
-                text = self._body(row, format)
+                if format not in ('markdown', 'storage', 'outline'):
+                    raise RemoteError('invalid_query', 'Use Markdown, storage or outline format')
+                if native_range:
+                    from .storage import outline, storage_section, to_markdown
+                    text = self._body(row, 'storage')
+                    if section is not None:
+                        if expected is None or format == 'outline':
+                            raise RemoteError('invalid_section', 'Use a native section key and its exact published version')
+                        text = storage_section(text, section)
+                    if format == 'outline':
+                        text = outline(text)
+                    elif format == 'markdown':
+                        text = to_markdown(text, f'{self.settings.site}/wiki/spaces/{self.settings.space}/pages/{id}')
+                else:
+                    text = self._body(row, format)
                 if locator is not None and locator != self._snapshot(id, row, text):
                     raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
                 offset, length = data.get('offset', 0), data.get('length', 4000)
@@ -538,6 +597,8 @@ class Replica:
                 result = dict(id=id, title=row['title'], version=row['version'], format=format,
                               content=text[offset:end], offset=offset, offsetUnit='unicode_code_points',
                               truncated=end < len(text), freshness=self._freshness(manifest))
+                if section is not None:
+                    result['section'] = section
                 if end < len(text):
                     result['nextOffset'] = end
                 if locator is not None:
@@ -839,187 +900,218 @@ class Replica:
         identity, started = self.settings.identity(), int(time.time() * 1000)
         with self._state_lock:
             denial_generation = self._denial_generation
-        with file_lock(self.control / 'sync.lock'):
+        sync_lock = self.control / 'sync.lock'
+        journal = self.control / 'transaction.json'
+        self._root_access()
+        if self._exists(journal):
+            with file_lock(sync_lock), file_lock(self.control / 'notice-access.lock'):
+                self._recover(allow_credential_switch=True, on_published=on_published)
+        with self._read_lease():
+            if self._exists(journal):
+                raise RemoteError('replica_recovery_pending', 'Recover the interrupted publication before staging')
             with file_lock(self.control / 'notice-access.lock'):
                 prior_denial = self._denial_token()
-            self._root_access()
-            with file_lock(self.control / 'notice-access.lock'):
-                self._recover(allow_credential_switch=True, on_published=on_published)
             previous = self._manifest(missing=True)
-            old = previous.get('pages', {})
-            reauthorizing = bool(old) and previous.get('credentialBinding') != self.settings.credential_fingerprint
-            timestamp = self._checkpoint().get('bodyRefreshedAt')
-            due = type(timestamp) is not int or timestamp < 0 or timestamp > started or started-timestamp >= self.settings.poll_interval_seconds*1000
-            full_pass = bool(self.settings.whole_space or authoritative_bodies and due and not reauthorizing)
-            requested = set(self.pending_repair)
-            nodes, unavailable = {}, set()
-            bulk_pages = {}
-            fence_errors = {'http_403', 'http_404', 'scope_metadata_changed', 'scope_outside_connection',
-                            'scope_not_current', 'malformed_list', 'malformed_node', 'scope_limit', 'invalid_request'}
+        # Native observations and immutable body staging do not hold the publication lock.
+        old = previous.get('pages', {})
+        reauthorizing = bool(old) and previous.get('credentialBinding') != self.settings.credential_fingerprint
+        timestamp = self._checkpoint().get('bodyRefreshedAt')
+        due = type(timestamp) is not int or timestamp < 0 or timestamp > started or started-timestamp >= self.settings.poll_interval_seconds*1000
+        full_pass = bool(self.settings.whole_space or authoritative_bodies and due and not reauthorizing)
+        with self._state_lock:
+            requested = dict(self.pending_repair)
+        nodes, unavailable = {}, set()
+        bulk_pages = {}
+        fence_errors = {'http_403', 'http_404', 'scope_metadata_changed', 'scope_outside_connection',
+                        'scope_not_current', 'malformed_list', 'malformed_node', 'malformed_child',
+                        'scope_limit', 'invalid_request'}
+        fenced = False
 
-            def observe_inventory(observed, folders_complete):
-                nonlocal prior_denial, denial_generation
-                current = {n.id: n for n in observed}
-                if folders_complete:
-                    drift = previous.get('folderParents', {}) != {n.id: n.parent_id for n in observed
-                        if n.type == 'folder' and n.parent_id is not None}
-                else:
-                    drift = set(old) != set(current) or any(current.get(id) != _node(row) for id, row in old.items())
-                if old and drift:
-                    token, generation, replaced = self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
-                    # Only our own fence can be repaired by this sweep. Never
-                    # absorb a newer in-process denial or another process token.
-                    if generation == denial_generation+1 and replaced == prior_denial:
-                        prior_denial, denial_generation = token, generation
+        def fence_observed_drift():
+            nonlocal prior_denial, denial_generation, fenced
+            if not old or fenced:
+                return
+            token, generation, replaced = self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
+            fenced = True
+            # This sweep can clear only the fence it observed or published.
+            if generation == denial_generation+1 and replaced == prior_denial:
+                prior_denial, denial_generation = token, generation
 
+        def observe_inventory(observed, folders_complete):
+            current = {n.id: n for n in observed}
+            if folders_complete:
+                drift = previous.get('folderParents', {}) != {n.id: n.parent_id for n in observed
+                    if n.type == 'folder' and n.parent_id is not None}
+            else:
+                drift = set(old) != set(current) or any(current.get(id) != _node(row) for id, row in old.items())
+            if drift:
+                fence_observed_drift()
+
+        try:
             if self.settings.whole_space:
-                try:
-                    inventory, bulk_pages = self.remote.whole_space_inventory(
-                        self.settings, storage=True, on_inventory=observe_inventory)
-                except RemoteError as error:
-                    if error.code in fence_errors:
-                        self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
-                    raise
+                inventory, bulk_pages = self.remote.whole_space_inventory(
+                    self.settings, storage=True, on_inventory=observe_inventory)
             else:
                 inventory = self.remote.inventory(self.settings)
-            if len(inventory) > PAGE_LIMIT or len({n.id for n in inventory}) != len(inventory):
-                raise RemoteError('invalid_inventory', 'Native inventory is duplicate or oversized')
-            for node in inventory:
+        except RemoteError as error:
+            if error.code in fence_errors:
+                fence_observed_drift()
+            raise
+        if len(inventory) > PAGE_LIMIT or len({n.id for n in inventory}) != len(inventory):
+            raise RemoteError('invalid_inventory', 'Native inventory is duplicate or oversized')
+        for node in inventory:
+            self._validate_native(node)
+            nodes[node.id] = node
+        for id, row in old.items():
+            if id in nodes or self.settings.whole_space:
+                continue
+            try:
+                node = self.remote.require_scope(self.settings, id)
                 self._validate_native(node)
-                nodes[node.id] = node
-            for id, row in old.items():
-                if id in nodes or self.settings.whole_space:
-                    continue
-                try:
-                    node = self.remote.require_scope(self.settings, id)
-                    self._validate_native(node)
-                    nodes[id] = node
-                except RemoteError as error:
-                    from .remote import RootScopeDenial
-                    if isinstance(error, RootScopeDenial) or error.code == 'http_401':
-                        raise
-                    if error.code not in ('scope_outside_connection', 'scope_not_current'):
-                        unavailable.add(id)
-            if not self.settings.whole_space:
-                root = self.remote.require_scope(self.settings, self.settings.root_page_id)
-                self._validate_native(root)
-                nodes[root.id] = root
-                # Resolve folder parents so a page can retain its real native hierarchy.
-                for node in list(nodes.values()):
-                    parent, seen = node.parent_id if node.id != root.id else None, {node.id}
-                    while parent is not None and parent != root.id:
-                        if parent in seen or len(seen) >= 100:
-                            raise RemoteError('invalid_inventory', 'Native ancestry is cyclic or too deep')
-                        seen.add(parent)
-                        if parent not in nodes:
+                nodes[id] = node
+            except RemoteError as error:
+                from .remote import RootScopeDenial
+                if isinstance(error, RootScopeDenial) or error.code == 'http_401':
+                    raise
+                if error.code in fence_errors:
+                    fence_observed_drift()
+                if error.code not in ('scope_outside_connection', 'scope_not_current'):
+                    unavailable.add(id)
+        if not self.settings.whole_space:
+            root = self.remote.require_scope(self.settings, self.settings.root_page_id)
+            self._validate_native(root)
+            nodes[root.id] = root
+            # Resolve folder parents so a page can retain its real native hierarchy.
+            for node in list(nodes.values()):
+                parent, seen = node.parent_id if node.id != root.id else None, {node.id}
+                while parent is not None and parent != root.id:
+                    if parent in seen or len(seen) >= 100:
+                        raise RemoteError('invalid_inventory', 'Native ancestry is cyclic or too deep')
+                    seen.add(parent)
+                    if parent not in nodes:
+                        try:
                             try:
                                 ancestor = self.remote.scope_node(parent, 'folder')
                             except RemoteError as error:
                                 if error.code != 'http_404':
                                     raise
                                 ancestor = self.remote.scope_node(parent)
-                            self._validate_native(ancestor)
-                            nodes[parent] = ancestor
-                        parent = nodes[parent].parent_id
+                        except RemoteError as error:
+                            if error.code in fence_errors:
+                                fence_observed_drift()
+                            raise
+                        self._validate_native(ancestor)
+                        nodes[parent] = ancestor
+                    parent = nodes[parent].parent_id
 
-            def chain(node):
+        def chain(node):
+            if self.settings.whole_space:
+                return [node]
+            result, seen = [], set()
+            while node is not None:
+                if node.id in seen or len(seen) >= 100:
+                    raise RemoteError('invalid_inventory', 'Native ancestry is cyclic or too deep')
+                seen.add(node.id)
+                result.insert(0, node)
+                if node.id == self.settings.root_page_id:
+                    return result
+                node = nodes.get(node.parent_id)
+            return None
+
+        selected = {id: n for id, n in nodes.items() if n.type == 'page' and n.status == 'current'
+                    and chain(n) is not None and id not in unavailable}
+        paths = self._paths(nodes, selected, chain, {i: old[i] for i in unavailable})
+        stage = self.control / ('stage-' + str(uuid.uuid4()))
+        ensure_private_directory(stage)
+        self._progress('staging')
+        next_pages, changed, bytes_written = {}, [], 0
+        journal_started = False
+        try:
+            for id, node in sorted(selected.items()):
+                prior = old.get(id)
+                refresh = id in requested or (full_pass and id in old)
+                cached = None
+                if not self.settings.whole_space and not refresh and prior is not None and prior['version'] == node.version:
+                    try:
+                        cached = self._body(prior, 'storage')
+                    except (OSError, ValueError, RemoteError):
+                        pass
                 if self.settings.whole_space:
-                    return [node]
-                result, seen = [], set()
-                while node is not None:
-                    if node.id in seen or len(seen) >= 100:
-                        raise RemoteError('invalid_inventory', 'Native ancestry is cyclic or too deep')
-                    seen.add(node.id)
-                    result.insert(0, node)
-                    if node.id == self.settings.root_page_id:
-                        return result
-                    node = nodes.get(node.parent_id)
-                return None
-
-            selected = {id: n for id, n in nodes.items() if n.type == 'page' and n.status == 'current'
-                        and chain(n) is not None and id not in unavailable}
-            paths = self._paths(nodes, selected, chain, {i: old[i] for i in unavailable})
-            stage = self.control / ('stage-' + str(uuid.uuid4()))
-            ensure_private_directory(stage)
-            self._progress('staging')
-            next_pages, changed, bytes_written = {}, [], 0
-            try:
-                for id, node in sorted(selected.items()):
-                    prior = old.get(id)
-                    refresh = id in requested or (full_pass and id in old)
-                    cached = None
-                    if not self.settings.whole_space and not refresh and prior is not None and prior['version'] == node.version:
-                        try:
-                            cached = self._body(prior, 'storage')
-                        except (OSError, ValueError, RemoteError):
-                            pass
-                    if self.settings.whole_space:
-                        page = bulk_pages[id]
-                    elif cached is not None:
-                        page = Page(node, cached)
-                    else:
-                        page = self.remote.inventory_page(self.settings, node, fresh_storage=refresh)
-                    if page.node != node:
-                        raise RemoteError('scope_metadata_changed', 'Native page changed during synchronization')
-                    bytes_written += len(page.body.encode('utf-8'))
-                    if bytes_written > 64*1024*1024 or len(page.body.encode('utf-8')) > 4*1024*1024:
-                        raise RemoteError('replica_body_limit', 'Replica body publication exceeds its bounded operation budget')
-                    row = self._stage_page(stage, page, paths[id])
-                    next_pages[id] = row
-                    if prior is not None and any(prior.get(k) != row.get(k) for k in ('version', 'path', 'bodyHash')):
-                        changed.append(dict(pageId=id, oldVersion=prior['version'], version=node.version, title=node.title,
-                                            path=row['path'], structural=prior['path'] != row['path']))
-                for id in sorted(unavailable):
-                    next_pages[id] = old[id]
-                    self._write(self._path(old[id]['path'], stage), self._body(old[id], 'markdown'))
-                _owners(next_pages)
-                folders = {id: n.parent_id for id, n in nodes.items()
-                           if n.type == 'folder' and n.parent_id is not None and id != self.settings.root_page_id}
-                manifest = dict(schemaVersion=1, site=self.settings.site, spaceId=self.settings.space_id,
-                                homePageId=self.settings.root_page_id or '', wholeSpace=self.settings.whole_space,
-                                structurePolicy='knowledge')
-                if self.settings.root_page_id is not None:
-                    manifest['knowledgeRootPageId'] = self.settings.root_page_id
-                if self.settings.page_only:
-                    manifest['pageOnly'] = True
-                manifest.update(explicitPages=[i for i in previous.get('explicitPages', []) if i in next_pages],
-                                inventoryComplete=True, credentialBinding=self.settings.credential_fingerprint,
-                                cursor=previous['cursor'] if unavailable and 'cursor' in previous else _now(),
-                                pages=next_pages, unavailable=sorted(unavailable), folderParents=folders, changes=changed)
-                manifest = changes.documents(previous, manifest)
-                self._validate(manifest)
-                if self.settings.identity() != identity:
-                    raise RemoteError('connection_changed', 'Connection changed during synchronization')
-                self._progress('verifying')
-                try:
-                    self.remote.verify_inventory(self.settings, list(nodes.values()),
-                                                 on_inventory=observe_inventory if self.settings.whole_space else None)
-                except RemoteError as error:
-                    if self.settings.whole_space and error.code in fence_errors:
-                        self.deny(timeout=max(0, min(3, deadline-time.monotonic())))
-                    raise
-                self._root_access()
-                self._progress('publishing')
-                self._metadata(stage / 'manifest.json', manifest)
-                self._check_projection_budget(stage, manifest['pages'])
-                self._metadata(self.control / 'transaction.json', dict(stage=stage.name))
-                with file_lock(self.control / 'notice-access.lock'):
-                    self._recover(allow_credential_switch=True, on_published=on_published)
-                    with self._state_lock:
-                        if denial_generation == self._denial_generation and self._denial_token() == prior_denial:
-                            self._unlink(self.control / changes.DENIAL, limit=65536, missing_ok=True)
-                        if denial_generation == self._denial_generation and not self._exists(self.control / changes.DENIAL):
-                            self._denied, self._denial_pending = False, False
+                    page = bulk_pages[id]
+                elif cached is not None:
+                    page = Page(node, cached)
+                else:
+                    page = self.remote.inventory_page(self.settings, node, fresh_storage=refresh)
+                if page.node != node:
+                    raise RemoteError('scope_metadata_changed', 'Native page changed during synchronization')
+                bytes_written += len(page.body.encode('utf-8'))
+                if bytes_written > 64*1024*1024 or len(page.body.encode('utf-8')) > 4*1024*1024:
+                    raise RemoteError('replica_body_limit', 'Replica body publication exceeds its bounded operation budget')
+                row = self._stage_page(stage, page, paths[id])
+                next_pages[id] = row
+                if prior is not None and any(prior.get(k) != row.get(k) for k in ('version', 'path', 'bodyHash')):
+                    changed.append(dict(pageId=id, oldVersion=prior['version'], version=node.version, title=node.title,
+                                        path=row['path'], structural=prior['path'] != row['path']))
+            for id in sorted(unavailable):
+                next_pages[id] = old[id]
+                self._write(self._path(old[id]['path'], stage), self._body(old[id], 'markdown'))
+            _owners(next_pages)
+            folders = {id: n.parent_id for id, n in nodes.items()
+                       if n.type == 'folder' and n.parent_id is not None and id != self.settings.root_page_id}
+            manifest = dict(schemaVersion=1, site=self.settings.site, spaceId=self.settings.space_id,
+                            homePageId=self.settings.root_page_id or '', wholeSpace=self.settings.whole_space,
+                            structurePolicy='knowledge')
+            if self.settings.root_page_id is not None:
+                manifest['knowledgeRootPageId'] = self.settings.root_page_id
+            if self.settings.page_only:
+                manifest['pageOnly'] = True
+            manifest.update(explicitPages=[i for i in previous.get('explicitPages', []) if i in next_pages],
+                            inventoryComplete=True, credentialBinding=self.settings.credential_fingerprint,
+                            cursor=previous['cursor'] if unavailable and 'cursor' in previous else _now(),
+                            pages=next_pages, unavailable=sorted(unavailable), folderParents=folders, changes=changed)
+            manifest = changes.documents(previous, manifest)
+            self._validate(manifest)
+            if self.settings.identity() != identity:
+                raise RemoteError('connection_changed', 'Connection changed during synchronization')
+            self._progress('verifying')
+            self.remote.verify_inventory(self.settings, list(nodes.values()),
+                                         on_inventory=observe_inventory if self.settings.whole_space else None)
+            self._root_access()
+            self._progress('publishing')
+            self._metadata(stage / 'manifest.json', manifest)
+            self._check_projection_budget(stage, manifest['pages'])
+            with file_lock(sync_lock), file_lock(self.control / 'notice-access.lock'):
+                if self._exists(journal) or self._manifest(missing=True) != previous:
+                    raise RemoteError('replica_generation_changed', 'The published generation changed during staging')
+                with self._state_lock:
+                    if (denial_generation != self._denial_generation or self._denial_token() != prior_denial
+                        or self.settings.identity() != identity):
+                        raise RemoteError('replica_generation_changed', 'The credential admission changed during staging')
+                journal_started = True
+                self._metadata(journal, dict(stage=stage.name))
+                self._recover(allow_credential_switch=True, on_published=on_published)
+                with self._state_lock:
+                    if denial_generation == self._denial_generation and self._denial_token() == prior_denial:
+                        self._unlink(self.control / changes.DENIAL, limit=65536, missing_ok=True)
+                    if denial_generation == self._denial_generation and not self._exists(self.control / changes.DENIAL):
+                        self._denied, self._denial_pending = False, False
                 if full_pass:
                     state = self._checkpoint()
                     state['bodyRefreshedAt'] = started
                     self._metadata(self.control / 'state.json', state)
-                self.pending_repair.difference_update(requested - unavailable)
-                return dict(status='synced_with_unavailable' if unavailable else 'synced', pages=len(next_pages),
-                            changes=changed, unavailable=sorted(unavailable), manifest=str(self.control / 'manifest.json'))
-            finally:
-                if not self._exists(self.control / 'transaction.json'):
-                    self._discard_stage(stage, list(paths.values()) + [old[i]['path'] for i in unavailable])
+            with self._state_lock:
+                for id, ticket in requested.items():
+                    if id not in unavailable and self.pending_repair.get(id) is ticket:
+                        del self.pending_repair[id]
+            return dict(status='synced_with_unavailable' if unavailable else 'synced', pages=len(next_pages),
+                        changes=changed, unavailable=sorted(unavailable), manifest=str(self.control / 'manifest.json'))
+        except RemoteError as error:
+            if error.code in fence_errors:
+                fence_observed_drift()
+            raise
+        finally:
+            if not journal_started or not self._exists(journal):
+                self._discard_stage(stage, list(paths.values()) + [old[i]['path'] for i in unavailable])
 
     def _validate_native(self, node):
         native_id(node.id)
@@ -1272,8 +1364,11 @@ class Replica:
         state = dict(cursor=next['cursor'], status='synced', credentialBinding=next.get('credentialBinding'))
         prior_state = self._checkpoint()
         stamp = prior_state.get('bodyRefreshedAt')
-        if type(stamp) is int and 0 <= stamp <= 9223372036854775807:
+        if (prior_state.get('credentialBinding') == state['credentialBinding']
+            and type(stamp) is int and 0 <= stamp <= 9223372036854775807):
             state['bodyRefreshedAt'] = stamp
+        else:
+            state['bodyRefreshedAt'] = 0
         self._metadata(self.control / 'state.json', state)
         feed = compact_json(next[changes.NOTICES])
         if len(feed.encode('utf-8')) > 65536:

@@ -22,6 +22,15 @@ knowledge; respect freshness, truncation and unavailable scope. Historical and
 production claims need the applicable source/version/environment, not the latest
 edit timestamp. A search snippet alone may omit exceptions.
 
+During development planning, start with focused searches under the configured
+wiki's current-document root when known. Reuse a guide already read at the same
+version in this session. Read exact search locators for the evidence you use,
+and expand only needed sections. For continued reads use the returned
+`nextOffset` and exact version when `truncated` is true. A read is limited
+to 12,000 characters. Use `preferReplica: true` for current-version outlines
+or sections when the published snapshot is sufficient. A pending connection may synchronize in the background
+while independent planning proceeds.
+
 Record relevant user material with attribution and preserve its evidence and
 authority distinctions below when summarizing, answering or updating it.
 Never record secrets or unrelated personal information. Reuse existing topic
@@ -42,6 +51,10 @@ Preserve macros, images, anchors, inline markers and unrelated content. Follow
 conflict/unknown responses; an uncertain write is not permission to retry.
 Verified remote success with local publication failure requires replica recovery,
 not another mutation. The plugin normally updates its replica after a write.
+An independent versioned `update_document` can use `defer: true` while you
+continue planning or development. Check `operation_status` in the same
+session and connection before relying on the change or reporting it published.
+Use the direct verified result for edits a later step immediately depends on.
 
 Use backend-specific comments/history when necessary. A resolved comment is not
 proof that its suggestion was accepted. Remote read permission alone does not

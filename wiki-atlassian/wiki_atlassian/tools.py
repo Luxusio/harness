@@ -13,6 +13,10 @@ def field(kind, description='', default=None):
     return value
 
 
+def bounded_integer(minimum, maximum, description, default=None):
+    return {**field(I, description, default), 'minimum': minimum, 'maximum': maximum}
+
+
 S, I, B, A, O = 'string', 'integer', 'boolean', 'array', 'object'
 SPACE = {'space': field(S, 'Exact configured space key; never guess an ambiguous write destination')}
 META = {'metadata': field(B, 'Include detailed native metadata', False)}
@@ -30,21 +34,25 @@ def tool(name, description, properties, required=()):
 
 WIKI_TOOLS = [
     tool('connection_status', 'Show readiness, scope and synchronization errors for each configured space. Partial readiness is not complete coverage.', {}),
-    tool('search_documents', 'Search the shared local replica by native ID or ranked text; returned read locators bind the actual source snapshot.', {
-        'query': field(S), 'scope': field(S, default='effective'), 'limit': field(I, default=10),
-        'cursor': field(S), **META, 'root': field(S), 'snippetLength': field(I), **SPACE}, ['query']),
+    tool('search_documents', 'Search the shared local replica. Start with a focused query under the project wiki root and read the returned exact locator for evidence.', {
+        'query': field(S), 'scope': field(S, default='effective'), 'limit': bounded_integer(1, 25, 'Maximum hits to return', 10),
+        'cursor': field(S), **META, 'root': field(S), 'snippetLength': bounded_integer(1, 500, 'Excerpt characters'), **SPACE}, ['query']),
     tool('document_relations', 'Read explicit authored relations and affected review candidates; links do not establish truth.', {
         'document': field(S), 'depth': field(I, default=2), 'limit': field(I, default=25), **SPACE}, ['document']),
-    tool('get_document', 'Read Markdown, native storage, or version-local outline. Keep version/section/format/snapshot on continued reads.', {
-        'document': field(S), 'version': field(I), 'offset': field(I, default=0), 'length': field(I, default=4000),
-        'format': field(S, default='markdown'), **META, 'section': field(S), 'snapshot': field(S), **SPACE}, ['document']),
+    tool('get_document', 'Read the returned search locator or a bounded document range. Continue only when truncated, using its nextOffset and the same version, format and snapshot.', {
+        'document': field(S), 'version': field(I), 'offset': field(I, default=0), 'length': bounded_integer(1, 12000, 'Unicode characters, maximum 12000', 4000),
+        'format': field(S, default='markdown'), **META, 'section': field(S), 'snapshot': field(S),
+        'preferReplica': field(B, 'Use the admitted published snapshot for current outline or section reads'), **SPACE}, ['document']),
     tool('create_document', 'Create under a native parent or explicit space, one mutation with verified native readback.', {
         'parent': field(S), 'title': field(S), 'content': field(S), 'format': field(S), **BODY,
         'basedOn': field(A), **SPACE}, ['title', 'content']),
-    tool('update_document', 'Use one exact versioned body edit or a pure append. Preserve rich references and never repeat unknown writes.', {
+    tool('update_document', 'Use one exact versioned body edit or a pure append. Use defer only for an independent versioned update, then check operation_status for the verified result.', {
         **{name: field(S) for name in ('document', 'content', 'title', 'old_text', 'new_text', 'append', 'format', 'parent', 'section')},
         'version': field(I), **BODY, 'edits': field(A), 'allowReferenceRemoval': field(B, default=False),
-        'basedOn': field(A), 'links': field(O), **SPACE}),
+        'basedOn': field(A), 'links': field(O),
+        'defer': field(B, 'Queue an explicit document and version and return a session-local operation ID'), **SPACE}),
+    tool('operation_status', 'Check a deferred update in the same MCP session and connection. Queued and running are not stored outcomes.', {
+        'operationId': field(S, 'Operation ID returned by update_document')}, ['operationId']),
     tool('list_comments', 'Read native footer/inline comments and bounded replies; returned references preserve thread identity.', {
         'target': field(S), 'limit': field(I, default=20), 'cursor': field(S), 'format': field(S), **META,
         'includeReplies': field(B, default=False), 'repliesPerComment': field(I, default=3), **SPACE}, ['target']),

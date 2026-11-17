@@ -2,7 +2,9 @@
 import io
 import json
 from pathlib import Path
+from queue import Queue
 import sys
+import threading
 
 try:
     import pytest
@@ -80,7 +82,8 @@ def test_shared_settings_keep_private_origin_pin_and_nested_repository_boundary(
 
 def test_public_tool_names_and_strict_types_are_preserved():
     assert set(SCHEMAS) == {'connection_status', 'search_documents', 'document_relations',
-        'get_document', 'create_document', 'update_document', 'list_comments', 'create_comment', 'update_comment', 'list_document_versions'}
+        'get_document', 'create_document', 'update_document', 'operation_status',
+        'list_comments', 'create_comment', 'update_comment', 'list_document_versions'}
     for tool in SCHEMAS.values():
         assert tool['inputSchema']['additionalProperties'] is False
     assert validate_arguments('get_document', {'document': '42'})['length'] == 4000
@@ -123,6 +126,75 @@ def test_private_tool_exceptions_do_not_echo_credentials():
     value = Server(personal=unsafe).handle({'id': 1, 'method': 'tools/call', 'params': {'name': 'get_document', 'arguments': {'document': '42', 'connection': 'personal'}}})
     assert value['result']['isError']
     assert 'secret-do-not-print' not in json.dumps(value)
+
+
+def test_deferred_update_does_not_block_reads_and_keeps_a_single_bounded_write_lane():
+    requests, replies = Queue(), Queue()
+    started, release = threading.Event(), threading.Event()
+    applied = []
+
+    class Reader:
+        def readline(self, size):
+            return requests.get(timeout=8)
+
+    class Writer:
+        def write(self, raw):
+            replies.put(json.loads(raw))
+
+        def flush(self):
+            pass
+
+    class Documents:
+        def execute(self, operation, args):
+            if operation == 'update_document':
+                started.set()
+                assert release.wait(5)
+                applied.append(args['version'])
+                if args['version'] == 5:
+                    return {'status': 'error', 'code': 'version_conflict'}
+                if args['version'] == 6:
+                    raise OSError('private provider details')
+                return {'status': 'updated', 'id': args['document'], 'version': args['version'] + 1}
+            assert operation == 'get_document'
+            return {'status': 'read', 'version': 4}
+
+    server = Server(documents=Documents())
+    thread = threading.Thread(target=server.run, args=(Reader(), Writer()))
+
+    def request(id, name, **arguments):
+        params = {'name': name, 'arguments': arguments}
+        requests.put(json.dumps({'id': id, 'method': 'tools/call', 'params': params}).encode() + b'\n')
+        response = replies.get(timeout=6)
+        assert response['id'] == id
+        return json.loads(response['result']['content'][0]['text'])
+
+    thread.start()
+    try:
+        first = request(1, 'update_document', document='42', version=4, append='note', defer=True)
+        assert first['status'] == 'queued' and started.wait(5)
+        op = first['operationId']
+        assert request(2, 'get_document', document='42')['version'] == 4
+        assert request(3, 'operation_status', operationId=op)['status'] == 'running'
+        assert request(4, 'operation_status', operationId=op, connection='personal')['code'] == 'operation_unavailable'
+        assert request(5, 'update_document', document='42', append='note', defer=True)['code'] == 'invalid_edit'
+        queued = {}
+        for version in range(5, 12):
+            result = request(version + 2, 'update_document', document='42', version=version, append='note', defer=True)
+            assert result['status'] == 'queued'
+            queued[version] = result['operationId']
+        rejected = request(14, 'update_document', document='42', version=12, append='note', defer=True)
+        assert rejected['code'] == 'server_busy' and not rejected['requestStarted']
+    finally:
+        requests.put(b'')
+        release.set()
+        thread.join(8)
+
+    assert not thread.is_alive() and applied == list(range(4, 12))
+    receipt = server._operation_status(op, 'project')
+    assert receipt['status'] == 'finished' and receipt['outcome'] == {'status': 'updated', 'id': '42', 'version': 5}
+    assert server._operation_status(queued[5], 'project')['outcome']['code'] == 'version_conflict'
+    unknown = server._operation_status(queued[6], 'project')
+    assert unknown['outcome']['status'] == 'unknown' and 'private provider details' not in str(unknown)
 
 
 def test_overflowing_numeric_rpc_id_is_refused_before_dispatch_and_stream_survives():

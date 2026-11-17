@@ -105,11 +105,11 @@ class MultiSpaceKnowledge:
                 self.slots[key].wake.set()
         return pending
 
-    def synchronize(self, key):
+    def synchronize(self, key, *, reuse_recent=False):
         with self._revocation_call():
-            return self._synchronize(key)
+            return self._synchronize(key, reuse_recent)
 
-    def _synchronize(self, key):
+    def _synchronize(self, key, reuse_recent):
         slot = self.slots[key]
         with slot.lock, self.remote.operation(timeout=30):
             try:
@@ -118,13 +118,28 @@ class MultiSpaceKnowledge:
                     slot.denied = True
                     slot.replica.deny()
                     raise RemoteError('scope_metadata_changed', 'Native space selection changed; reconnect to admit it')
-                if slot.replica is None:
+                attaching = slot.replica is None
+                replica = Replica(settings, self.remote) if attaching else slot.replica
+                delay = replica.refresh_delay() if reuse_recent else 0
+                if attaching:
+                    if not settings.whole_space:
+                        try:
+                            replica._root_access()
+                        except RemoteError as exc:
+                            replica.handle_denial(exc)
+                            raise
                     slot.settings = settings
-                    slot.replica = Replica(settings, self.remote)
-                    slot.replica.on_repair = slot.wake.set
-                    slot.replica.on_authorization_denied = lambda: self._deny_all(wake=False)
-                    slot.service = WikiService(settings, self.remote, slot.replica)
-                slot.replica.synchronize(authoritative_bodies=True)
+                    replica.on_repair = slot.wake.set
+                    replica.on_authorization_denied = lambda: self._deny_all(wake=False)
+                    slot.replica = replica
+                    slot.service = WikiService(settings, self.remote, replica)
+                if delay:
+                    return delay
+                result = replica.synchronize(authoritative_bodies=True)
+                if result is None:
+                    # A different session is publishing or already sweeping.
+                    # Check for its published snapshot without repeating the sweep.
+                    return min(2, self.project.poll_interval_seconds)
                 slot.failure, slot.denied = None, False
             except Exception as exc:
                 slot.failure = exc.code if isinstance(exc, RemoteError) else 'sync_failed'
@@ -139,16 +154,21 @@ class MultiSpaceKnowledge:
         while not self.stop.is_set():
             if not self.permit.acquire(timeout=.2):
                 continue
+            delay = self.project.poll_interval_seconds
             try:
+                slot.wake.clear()
                 if not self.stop.is_set():
                     try:
-                        self.synchronize(key)
+                        delay = self.synchronize(key, reuse_recent=True) or delay
+                    except RemoteError as exc:
+                        if exc.code in ('replica_generation_changed', 'replica_recovery_pending'):
+                            delay = min(2, delay)
                     except Exception:
                         pass  # Sanitized per-space state owns the failure.
             finally:
                 self.permit.release()
-            slot.wake.wait(self.project.poll_interval_seconds)
-            slot.wake.clear()
+            if not self.stop.is_set():
+                slot.wake.wait(delay)
 
     def close(self):
         self.stop.set()

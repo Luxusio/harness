@@ -221,6 +221,123 @@ class ReplicaTests(unittest.TestCase):
         self.remote.pages[id] = Page(replace(current.node, **node), current.body if body is None else body)
         return current, self.remote.pages[id]
 
+    def test_recent_checkpoint_requires_same_credentials_and_no_pending_repair(self):
+        self.assertEqual(self.replica.refresh_delay(), 0)
+        self.replica.synchronize()
+        self.assertGreater(self.replica.refresh_delay(), 0)
+        rotated = Replica(self.setting(token='changed'), self.remote)
+        self.addCleanup(rotated.close)
+        self.assertEqual(rotated.refresh_delay(), 0)
+        self.replica.request_repair('211')
+        self.assertEqual(self.replica.refresh_delay(), 0)
+
+    def test_previous_generation_is_readable_while_provider_is_waiting(self):
+        self.replica.synchronize()
+        self.expire()
+        started, release = threading.Event(), threading.Event()
+        completed = []
+
+        def wait_for_provider(id):
+            started.set()
+            self.assertTrue(release.wait(5))
+
+        self.remote.after_body = wait_for_provider
+        thread = threading.Thread(target=lambda: completed.append(self.replica.synchronize()))
+        thread.start()
+        try:
+            self.assertTrue(started.wait(5))
+            self.assertTrue(self.replica.status()['ready'])
+            row = self.replica.get_document({'document': '211'})
+            self.assertIn('Shared evidence', row['content'])
+            self.assertEqual(row['version'], 1)
+            with self.replica._read_lease():
+                outline = self.replica.get_document({'document': '211', 'format': 'outline', 'preferReplica': True})
+            self.assertIn('Work', outline['content'])
+            self.assertEqual(outline['freshness']['source'], 'local_replica')
+        finally:
+            release.set()
+            thread.join(8)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(completed[0]['status'], 'synced')
+
+    def test_older_inflight_sweep_cannot_overwrite_a_newer_published_write(self):
+        self.replica.synchronize()
+        self.expire()
+        started, release = threading.Event(), threading.Event()
+        errors = []
+
+        def wait_for_provider(id):
+            started.set()
+            self.assertTrue(release.wait(10))
+
+        def sweep():
+            try:
+                self.replica.synchronize()
+            except RemoteError as exc:
+                errors.append(exc.code)
+
+        self.remote.after_body = wait_for_provider
+        thread = threading.Thread(target=sweep)
+        thread.start()
+        try:
+            self.assertTrue(started.wait(5))
+            earlier = self.remote.pages['211']
+            newer = Page(replace(earlier.node, version=2), '<p>Verified publication</p>')
+            self.replica.publish_verified(newer, earlier)
+        finally:
+            release.set()
+            thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, ['replica_generation_changed'])
+        result = self.replica.get_document({'document': '211'})
+        self.assertEqual(result['version'], 2)
+        self.assertIn('Verified publication', result['content'])
+        self.assertFalse((self.replica.control / 'transaction.json').exists())
+
+    def test_confirmed_root_child_loss_fences_cached_body_before_publication(self):
+        self.replica.synchronize()
+        self.expire()
+        self.remote.denied.add('211')
+        ready, release = threading.Event(), threading.Event()
+        completed = []
+
+        def wait_for_staging(id):
+            ready.set()
+            self.assertTrue(release.wait(10))
+
+        self.remote.after_body = wait_for_staging
+        thread = threading.Thread(target=lambda: completed.append(self.replica.synchronize()))
+        thread.start()
+        try:
+            self.assertTrue(ready.wait(5))
+            self.assertEqual(self.replica.get_document({'document': '211'})['code'], 'root_scope_denied')
+            independent = Replica(self.settings, self.remote)
+            self.addCleanup(independent.close)
+            self.assertEqual(independent.get_document({'document': '211'})['code'], 'root_scope_denied')
+        finally:
+            release.set()
+            thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(completed[0]['status'], 'synced_with_unavailable')
+        self.assertEqual(self.replica.get_document({'document': '211'})['code'], 'document_unavailable')
+
+    def test_root_ancestor_loss_after_omitted_child_recheck_fences_cached_body(self):
+        self.remote.pages['212'] = Page(Node('212', 'Folder', '210', 'folder', '20', 1), '')
+        self.change('211', parent_id='212')
+        self.replica.synchronize()
+        self.remote.inventory = lambda settings: [self.remote.pages['210'].node]
+        original = self.remote.scope_node
+
+        def reject_folder(id, type='page'):
+            if id == '212':
+                raise RemoteError('http_403', 'Synthetic revoked ancestor')
+            return original(id, type)
+
+        self.remote.scope_node = reject_folder
+        with self.assertRaisesRegex(RemoteError, 'revoked ancestor'):
+            self.replica.synchronize()
+        self.assertEqual(self.replica.get_document({'document': '211'})['code'], 'root_scope_denied')
+
     @contextmanager
     def competing_notice_lock(self, seconds):
         script = ('import sys,time; sys.path.insert(0,sys.argv[1]); from wiki_platform import file_lock\n'
@@ -464,7 +581,8 @@ class ReplicaTests(unittest.TestCase):
             self.remote.after_root = None
             self.replica.deny()
         self.remote.after_root = deny_during_root
-        self.replica.synchronize()
+        with self.assertRaisesRegex(RemoteError, 'credential admission changed'):
+            self.replica.synchronize()
         newer = (self.replica.control / 'notice-access-denied').read_bytes()
         self.assertNotEqual(earlier, newer)
         self.assertEqual('root_scope_denied', self.replica.get_document(dict(document='211'))['code'])

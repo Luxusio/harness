@@ -137,15 +137,28 @@ a fresh synchronization. Existing cache directories remain untouched; their
 authorization is not imported into a new selection.
 
 The MCP owns automatic startup/periodic synchronization and publication of
-verified writes. Search/read queries use the shared corpus; history, comments
-and native edits retain backend-specific semantics. Normal writes update the
-existing replica without another refresh call. A remote success with local
-failure is distinct from a failed or uncertain remote write; never retry an
-uncertain mutation merely to refresh local files.
+verified writes. Once the configured scope is admitted, a recent complete
+checkpoint for the same credential can serve a new session without another
+inventory sweep. Background inventory and staging allow reads of the currently
+admitted snapshot. The publication transaction is exclusive. Normal writes
+update the existing replica without another refresh call. A remote success
+with local failure is distinct from a failed or uncertain remote write.
 
-Current document reads/search use the local replica. Exact XML outline/section
-and historical-version reads retain native validation and can contact the
-service. Background synchronization also makes network requests: inventory
+Read requests can run while native edits are in progress. For independent
+work, call `update_document` with an exact `document`, `version`, and
+`defer: true`. The resulting operation ID is session-local. A queued or
+running update has yet to return a verified result. Check `operation_status`
+with the same connection and ID before claiming success or starting a
+dependent edit. Existing calls return their verified result directly. The
+server serializes mutations and drains accepted work on clean stdio close.
+If the process stops or an old result expires, inspect native history before
+making another edit. Never repeat an uncertain mutation.
+
+Current document reads and search use the local replica. Request
+`preferReplica: true` for current-version outline or section reads that can
+use the admitted snapshot and its freshness labels. Historical versions and
+ordinary native outline/section reads can contact the service. Background
+synchronization also makes network requests: inventory
 polls check versions/access, and one coordinated authoritative body sweep per
 configured interval catches changes that do not increment native page versions.
 Multiple processes share a sweep lease and the existing checkpoint's derived

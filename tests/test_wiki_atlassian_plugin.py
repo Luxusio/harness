@@ -27,6 +27,9 @@ except ModuleNotFoundError as error:
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "wiki-atlassian"
+WIKI_TOOLS = {"connection_status", "search_documents", "get_document", "create_document",
+              "update_document", "operation_status", "list_comments", "create_comment",
+              "update_comment", "list_document_versions", "document_relations"}
 sys.path.insert(0, str(ROOT / 'plugin/scripts'))
 
 
@@ -511,8 +514,7 @@ def test_actual_packaged_payload_captures_consuming_project_before_plugin_chdir(
     replies = _calls(packaged / "scripts/launch.py", nested, enabled_environment(home,
         WIKI_ATLASSIAN_ENABLED="false", WIKI_ATLASSIAN_SITE="https://ignored.invalid"), command=command)
     tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
-    assert {t["name"] for t in tools} == {"connection_status", "search_documents", "get_document", "create_document",
-        "update_document", "list_comments", "create_comment", "update_comment", "list_document_versions", "document_relations"}
+    assert {t["name"] for t in tools} == WIKI_TOOLS
     assert not list(nested.iterdir())
 
 
@@ -634,7 +636,7 @@ def test_common_manifest_nesting_boundary_matches_harness(tmp_path, nesting, acc
     assert destination.select_destination(env, cwd=tmp_path)["mode"] == ("external" if accepted else "unavailable")
     if accepted:
         tools = next(row["result"]["tools"] for row in _calls(_runtime(), tmp_path, env) if row.get("id") == 2)
-        assert len(tools) == 10
+        assert {tool["name"] for tool in tools} == WIKI_TOOLS
     else:
         result = subprocess.run([sys.executable, "-I", "-B", str(_runtime())],
             cwd=tmp_path, env=env, input="", text=True, capture_output=True, timeout=20)
@@ -649,8 +651,8 @@ def test_multiple_spaces_and_optional_roots_expose_one_toolset_before_native_res
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "connection_status", "arguments": {"connection": "project"}}},
     ])
     tools = next(row["result"]["tools"] for row in replies if row.get("id") == 2)
-    assert len(tools) == 10
-    assert len({tool["name"] for tool in tools}) == 10
+    assert len(tools) == len(WIKI_TOOLS)
+    assert {tool["name"] for tool in tools} == WIKI_TOOLS
     for name in ("search_documents", "get_document", "create_document", "update_document"):
         tool = next(tool for tool in tools if tool["name"] == name)
         assert tool["inputSchema"]["properties"]["space"]["type"] == "string"

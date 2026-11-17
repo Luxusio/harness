@@ -40,6 +40,72 @@ def connected(tmp_path):
     return native, confirmed, project, remote, manager
 
 
+def test_warm_start_reuses_complete_inventory_only_after_live_root_admission(tmp_path):
+    native, _, project, remote, previous = connected(tmp_path)
+    previous.close()
+    warm = MultiSpaceKnowledge(project, remote, start_workers=False)
+    denied = MultiSpaceKnowledge(project, remote, start_workers=False)
+    try:
+        start = len(native.calls)
+        assert warm.synchronize('DOC', reuse_recent=True) > 0
+        assert warm.execute('get_document', {'document': '11', 'space': 'DOC'})['version'] == 1
+        calls = native.calls[start:]
+        assert any('/pages/10' in call[1] for call in calls)
+        assert not any('/direct-children' in call[1] for call in calls)
+
+        original = native.hook
+        def reject_root(method, path, query, payload):
+            if method == 'GET' and path == '/wiki/api/v2/pages/10':
+                return 403, {}, {}
+            return original(method, path, query, payload)
+        native.hook = reject_root
+        with pytest.raises(RemoteError):
+            denied.synchronize('DOC', reuse_recent=True)
+        assert not denied.status()['ready']
+        assert 'content' not in denied.execute('get_document', {'document': '11', 'space': 'DOC'})
+    finally:
+        warm.close()
+        denied.close()
+
+
+def test_expired_root_snapshot_is_not_exposed_during_initial_admission(tmp_path):
+    native, _, project, remote, previous = connected(tmp_path)
+    replica = previous.slots['DOC'].replica
+    state = replica._checkpoint()
+    replica._metadata(replica.control / 'state.json', dict(state, bodyRefreshedAt=0))
+    previous.close()
+    admitted = MultiSpaceKnowledge(project, remote, start_workers=False)
+    waiting, release = threading.Event(), threading.Event()
+    failures = []
+    original = native.hook
+
+    def reject_root(method, path, query, payload):
+        if method == 'GET' and path == '/wiki/api/v2/pages/10':
+            waiting.set()
+            assert release.wait(10)
+            return 403, {}, {}
+        return original(method, path, query, payload)
+
+    def attempt():
+        try:
+            admitted.synchronize('DOC', reuse_recent=True)
+        except RemoteError as exc:
+            failures.append(exc.code)
+
+    native.hook = reject_root
+    thread = threading.Thread(target=attempt)
+    thread.start()
+    try:
+        assert waiting.wait(5)
+        assert not admitted.status()['ready']
+        assert admitted.slots['DOC'].service is None
+    finally:
+        release.set()
+        thread.join(10)
+        admitted.close()
+    assert not thread.is_alive() and failures == ['http_403']
+
+
 def test_concurrent_whole_spaces_have_isolated_immutable_sanitized_progress(tmp_path):
     import json
     state = NativeState()
