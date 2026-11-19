@@ -32,6 +32,7 @@ from .tools import MAX_BATCH_SEARCH_HITS, MAX_RETRIEVAL_BATCH
 BODY_LIMIT = 8 * 1024 * 1024
 MANIFEST_LIMIT = 16 * 1024 * 1024
 PAGE_LIMIT = 20_000
+READ_ADMISSION_SECONDS = 2.0
 _DEVICE = r'(?i)(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?'
 
 
@@ -91,6 +92,15 @@ def _row(node, path, storage, body_hash):
     row.update(type=node.type, spaceId=node.space_id, version=node.version, status=node.status,
                path=path, storage=storage, bodyHash=body_hash)
     return row
+
+
+def _title_index(nodes, unavailable=()):
+    """Only an unambiguous current page in this admitted inventory is a target."""
+    excluded = set(unavailable)
+    result = {}
+    for node in nodes:
+        result[node.title] = None if node.title in result or node.id in excluded else node.id
+    return result
 
 
 def _owners(pages, known=None):
@@ -323,11 +333,14 @@ class Replica:
                 native_id(node.space_id)
                 if node.parent_id is not None:
                     native_id(node.parent_id)
-                if (node.id != id or node.type != 'page' or node.status != 'current'
+                if (node.id != id or node.type != 'page' or node.status != 'current' or node.space_id != self.settings.space_id
                     or type(node.version) is not int or not 1 <= node.version <= 2147483647
                     or not isinstance(node.title, str) or len(node.title) > 1000
                     or not isinstance(row['bodyHash'], str) or not changes.HASH.fullmatch(row['bodyHash'])):
                     raise ValueError('Invalid replica node')
+                linked = row.get('linkedTitles', [])
+                if not isinstance(linked, list) or any(not isinstance(title, str) or not 1 <= len(title) <= 1000 for title in linked):
+                    raise ValueError('Invalid title link dependency')
                 _relative(row['path'])
                 _relative(row['storage'])
                 if row['storage'] != f'.sync/storage/{id}-{node.version}-{row["bodyHash"]}.xhtml':
@@ -362,15 +375,26 @@ class Replica:
             raise RemoteError('invalid_mirror_snapshot', 'Synchronized mirror data is malformed; preserve it and rebuild the disposable mirror') from None
 
     @contextmanager
-    def _read_lease(self):
+    def _read_lease(self, wait=0):
         # The platform lock uses one OS handle per process. Share that handle
         # across this replica's concurrent readers rather than reopening it.
-        with self._reader_lock:
-            if not self._reader_count:
-                lease = file_lock(self.control / 'sync.lock', shared=True)
-                lease.__enter__()
-                self._reader_lease = lease
-            self._reader_count += 1
+        deadline = time.monotonic() + wait
+        delay = .025
+        while True:
+            try:
+                with self._reader_lock:
+                    if not self._reader_count:
+                        lease = file_lock(self.control / 'sync.lock', shared=True)
+                        lease.__enter__()
+                        self._reader_lease = lease
+                    self._reader_count += 1
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(2 * delay, .25)
         try:
             yield
         finally:
@@ -381,10 +405,10 @@ class Replica:
                     self._reader_lease = None
 
     @contextmanager
-    def _locked_manifest(self):
+    def _locked_manifest(self, *, wait=0):
         identity = self.settings.identity()
         try:
-            with self._read_lease():
+            with self._read_lease(wait):
                 if self._exists(self.control / 'transaction.json'):
                     raise RemoteError('replica_recovery_pending', 'Automatic synchronization must finish the interrupted publication')
                 manifest = self._manifest()
@@ -417,6 +441,8 @@ class Replica:
                 return 0
         try:
             with self._locked_manifest() as manifest:
+                if manifest.get('titleProjectionVersion') != 1:
+                    return 0
                 state = self._checkpoint()
                 if (state.get('cursor') != manifest['cursor']
                     or state.get('credentialBinding') != self.settings.credential_fingerprint):
@@ -548,6 +574,22 @@ class Replica:
     def _snapshot(self, id, row, markdown):
         return _hash(':'.join((self.search_identity, id, str(row['version']), row['bodyHash'], _hash(markdown))))
 
+    def project_native_markdown(self, page, body, url):
+        """Resolve current native title links only against the same admitted source revision."""
+        from .markdown import to_markdown
+        try:
+            with self._locked_manifest(wait=READ_ADMISSION_SECONDS) as manifest:
+                row = manifest['pages'].get(page.node.id)
+                unavailable = manifest.get('unavailable', [])
+                if (row and page.node.id not in unavailable and _node(row) == page.node
+                        and row['bodyHash'] == _hash(page.body)):
+                    titles = _title_index(map(_node, manifest['pages'].values()), unavailable)
+                    return to_markdown(body, url, resolve_title=titles.get)
+        except RemoteError as error:
+            if error.code not in ('replica_busy', 'replica_missing', 'replica_incomplete', 'replica_recovery_pending'):
+                raise
+        return to_markdown(body, url)
+
     @staticmethod
     def _read_locator(data):
         locator = data.get('snapshot')
@@ -571,6 +613,11 @@ class Replica:
             if locator is not None:
                 raise RemoteError('snapshot_changed', 'The document projection changed; restart search')
             return None
+        if data.get('includeBody') is False:
+            if locator is not None or data.get('section') is not None or data.get('offset', 0):
+                raise RemoteError('invalid_request', 'A metadata-only read has no section, range or search snapshot')
+            return dict(id=id, title=row['title'], version=row['version'], parentId=row.get('parentId'),
+                        spaceId=row['spaceId'], bodyHash=row['bodyHash'])
         section, format = data.get('section'), data.get('format', 'markdown')
         if format not in ('markdown', 'storage', 'outline'):
             raise RemoteError('invalid_query', 'Use Markdown, storage or outline format')
@@ -580,14 +627,18 @@ class Replica:
         key = (id, format, section)
         if key not in bodies:
             if section is not None or format == 'outline':
-                from .storage import outline, storage_section, to_markdown
+                from .storage import outline, storage_section
+                from .markdown import to_markdown
                 text = self._body(row, 'storage')
                 if section is not None:
                     text = storage_section(text, section)
                 if format == 'outline':
                     text = outline(text)
                 elif format == 'markdown':
-                    text = to_markdown(text, f'{self.settings.site}/wiki/spaces/{self.settings.space}/pages/{id}')
+                    if 'titleIndex' not in bodies:
+                        bodies['titleIndex'] = _title_index(map(_node, manifest['pages'].values()), manifest.get('unavailable', []))
+                    text = to_markdown(text, f'{self.settings.site}/wiki/spaces/{self.settings.space}/pages/{id}',
+                                       resolve_title=bodies['titleIndex'].get)
             else:
                 text = self._body(row, format)
             bodies[key] = text, None
@@ -618,9 +669,9 @@ class Replica:
         try:
             locator = self._read_locator(data)
             native_range = data.get('section') is not None or data.get('format') == 'outline'
-            if native_range and (not data.get('preferReplica') or data.get('metadata')):
+            if data.get('metadata') or (native_range and not data.get('preferReplica')):
                 return None
-            with self._locked_manifest() as manifest:
+            with self._locked_manifest(wait=READ_ADMISSION_SECONDS) as manifest:
                 result = self._read_range(data, manifest, locator, {})
                 if result is not None:
                     result['freshness'] = self._freshness(manifest)
@@ -630,7 +681,7 @@ class Replica:
 
     def read_batch(self, ranges):
         try:
-            with self._locked_manifest() as manifest:
+            with self._locked_manifest(wait=READ_ADMISSION_SECONDS) as manifest:
                 bodies, documents = {}, []
                 for data in ranges:
                     try:
@@ -1099,6 +1150,7 @@ class Replica:
         selected = {id: n for id, n in nodes.items() if n.type == 'page' and n.status == 'current'
                     and chain(n) is not None and id not in unavailable}
         paths = self._paths(nodes, selected, chain, {i: old[i] for i in unavailable})
+        titles = _title_index((*selected.values(), *(_node(old[i]) for i in unavailable)), unavailable)
         stage = self.control / ('stage-' + str(uuid.uuid4()))
         ensure_private_directory(stage)
         self._progress('staging')
@@ -1125,7 +1177,7 @@ class Replica:
                 bytes_written += len(page.body.encode('utf-8'))
                 if bytes_written > 64*1024*1024 or len(page.body.encode('utf-8')) > 4*1024*1024:
                     raise RemoteError('replica_body_limit', 'Replica body publication exceeds its bounded operation budget')
-                row = self._stage_page(stage, page, paths[id])
+                row = self._stage_page(stage, page, paths[id], titles)
                 next_pages[id] = row
                 if prior is not None and any(prior.get(k) != row.get(k) for k in ('version', 'path', 'bodyHash')):
                     changed.append(dict(pageId=id, oldVersion=prior['version'], version=node.version, title=node.title,
@@ -1138,7 +1190,7 @@ class Replica:
                        if n.type == 'folder' and n.parent_id is not None and id != self.settings.root_page_id}
             manifest = dict(schemaVersion=1, site=self.settings.site, spaceId=self.settings.space_id,
                             homePageId=self.settings.root_page_id or '', wholeSpace=self.settings.whole_space,
-                            structurePolicy='knowledge')
+                            structurePolicy='knowledge', titleProjectionVersion=1)
             if self.settings.root_page_id is not None:
                 manifest['knowledgeRootPageId'] = self.settings.root_page_id
             if self.settings.page_only:
@@ -1233,18 +1285,28 @@ class Replica:
                 segments[node.id] = candidate
         return {id: 'pages/'+'/'.join(segments[n.id] for n in chain(node))+'.md' for id, node in selected.items()}
 
-    def _stage_page(self, stage, page, path):
+    def _stage_page(self, stage, page, path, titles):
         from .markdown import to_markdown
         node, hash = page.node, _hash(page.body)
         storage = f'.sync/storage/{node.id}-{node.version}-{hash}.xhtml'
         self._write(self._path(storage), page.body)
-        markdown = (f'---\npage_id: "{node.id}"\nversion: {node.version}\n'
-                    f'url: {self.settings.site}/wiki/spaces/{self.settings.space}/pages/{node.id}\n---\n\n'
-                    + to_markdown(page.body))
+        referenced = set()
+
+        def resolve_title(title):
+            if len(title) <= 1000:
+                referenced.add(title)
+            return titles.get(title)
+
+        url = f'{self.settings.site}/wiki/spaces/{self.settings.space}/pages/{node.id}'
+        markdown = (f'---\npage_id: "{node.id}"\nversion: {node.version}\nurl: {url}\n---\n\n'
+                    + to_markdown(page.body, url, resolve_title=resolve_title))
         if len(markdown.encode('utf-8')) > BODY_LIMIT:
             raise RemoteError('replica_body_limit', 'Markdown projection exceeds its byte budget')
         self._write(self._path(path, stage), markdown)
-        return dict(_row(node, path, storage, hash), relations=knowledge_relations(page.body, self.settings.site, self.settings.space))
+        row = dict(_row(node, path, storage, hash), relations=knowledge_relations(page.body, self.settings.site, self.settings.space))
+        if referenced:
+            row['linkedTitles'] = sorted(referenced)
+        return row
 
     def _discard_stage(self, stage, relative_paths=()):
         # Delete only proven projection names, never recursively walk an untrusted
@@ -1531,9 +1593,20 @@ class Replica:
                 raise RemoteError('replica_selection_limit', 'Explicit mirror selection exceeds the page limit')
             stage = self.control / ('stage-'+str(uuid.uuid4()))
             ensure_private_directory(stage)
+            reproject = set()
             try:
-                rows[node.id] = self._stage_page(stage, page, path)
-                for id in changed - {node.id}:
+                titles = _title_index(map(_node, rows.values()), unavailable)
+                rows[node.id] = self._stage_page(stage, page, path, titles)
+                if prior is None or prior['title'] != node.title or node.id in previous.get('unavailable', []):
+                    old_titles = _title_index(map(_node, old.values()), previous.get('unavailable', []))
+                    affected_titles = {title for title in {node.title, prior['title'] if prior else node.title}
+                                       if titles.get(title) != old_titles.get(title)}
+                    reproject = {id for id, row in old.items() if id != node.id and id not in unavailable
+                                 and affected_titles.intersection(row.get('linkedTitles', ()))}
+                for id in reproject:
+                    row = old[id]
+                    rows[id] = self._stage_page(stage, Page(_node(row), self._body(row, 'storage')), rows[id]['path'], titles)
+                for id in changed - {node.id} - reproject:
                     self._write(self._path(rows[id]['path'], stage), self._body(old[id], 'markdown'))
                 records = [dict(pageId=id, **({'oldVersion': old[id]['version']} if id in old else {}),
                                 version=rows[id]['version'], title=rows[id]['title'], path=rows[id]['path'],
@@ -1544,7 +1617,7 @@ class Replica:
                 if self.settings.identity() != identity:
                     raise RemoteError('connection_changed', 'Connection changed during publication')
                 self._metadata(stage / 'manifest.json', next)
-                files = [rows[i]['path'] for i in sorted(changed)]
+                files = [rows[i]['path'] for i in sorted(changed | reproject)]
                 self._check_projection_budget(stage, next['pages'], files)
                 self._metadata(self.control / 'transaction.json', dict(stage=stage.name, files=files))
                 with file_lock(self.control / 'notice-access.lock'):
@@ -1553,7 +1626,7 @@ class Replica:
                     self._recover()
             finally:
                 if not self._exists(self.control / 'transaction.json'):
-                    self._discard_stage(stage, [rows[i]['path'] for i in changed])
+                    self._discard_stage(stage, [rows[i]['path'] for i in changed | reproject])
 
     def poll_comments(self, page_ids=None, interval_seconds=None, *, _deadline=None):
         targets = self.settings.watched_comment_pages if page_ids is None else page_ids

@@ -231,6 +231,106 @@ class ReplicaTests(unittest.TestCase):
         self.replica.request_repair('211')
         self.assertEqual(self.replica.refresh_delay(), 0)
 
+    def test_bodyless_read_is_admitted_without_opening_a_body(self):
+        from unittest.mock import patch
+        self.replica.synchronize()
+        with patch.object(self.replica, '_body', side_effect=AssertionError('body opened')):
+            read = {'document': '211', 'includeBody': False}
+            page = self.replica.get_document(read)
+            self.assertEqual(('Operations', 1, '210'), (page['title'], page['version'], page['parentId']))
+            self.assertNotIn('content', page)
+            self.assertEqual(page['bodyHash'], self.replica.read_batch([read])['documents'][0]['bodyHash'])
+            self.assertEqual('invalid_request', self.replica.get_document({**read, 'offset': 1})['code'])
+            self.replica.deny()
+            self.assertEqual('root_scope_denied', self.replica.get_document(read)['code'])
+
+    def test_read_waits_for_brief_writer_and_checks_denial_at_admission(self):
+        self.replica.synchronize()
+        for denied in (False, True):
+            with file_lock(self.replica.control / 'sync.lock'):
+                done = threading.Event()
+                result = []
+                def read():
+                    result.append(self.replica.get_document({'document': '211'}))
+                    done.set()
+                reader = threading.Thread(target=read)
+                reader.start()
+                self.assertFalse(done.wait(.1))
+                if denied:
+                    self.replica._denied = True
+            reader.join(5)
+            self.assertFalse(reader.is_alive())
+            if denied:
+                self.assertEqual('root_scope_denied', result[0]['code'])
+            else:
+                self.assertIn('Shared evidence', result[0]['content'])
+
+    def test_title_link_reprojection_tracks_ambiguity_without_changing_native_version(self):
+        body = ('<h2>Evidence</h2><p><ac:link ac:anchor="Step"><ri:page ri:content-title="Operations"/>'
+                '<ac:plain-text-link-body>Open</ac:plain-text-link-body></ac:link> '
+                '<ac:link><ri:page ri:space-key="OTHER" ri:content-title="Operations"/></ac:link></p>')
+        self.change('210', body)
+        self.replica.synchronize()
+        read = {'document': '210'}
+        url = 'https://example.test/wiki/spaces/COMMON/pages/211#Step'
+        projected = self.replica.get_document(read)['content']
+        self.assertIn(url, projected)
+        self.assertIn('space=OTHER; unresolved', projected)
+        section = self.replica.get_document({**read, 'section': '1', 'version': 1, 'preferReplica': True})
+        self.assertIn(url, section['content'])
+        hit = self.replica.search({'queries': ['Evidence'], 'limit': 4})['groups'][0]['results']
+        locator = next(item['read'] for item in hit if item['id'] == '210')
+        sibling = Page(Node('212', 'Operations', '210', 'page', '20', 1), '<p>Duplicate</p>')
+        self.remote.pages['212'] = sibling
+        self.replica.publish_verified(sibling)
+        ambiguous = self.replica.get_document(read)
+        self.assertEqual(1, ambiguous['version'])
+        self.assertNotIn(url, ambiguous['content'])
+        self.assertIn('title=Operations; anchor=Step; unresolved', ambiguous['content'])
+        self.assertEqual('snapshot_changed', self.replica.get_document(locator)['code'])
+        self.assertNotIn('210', [item['pageId'] for item in self.metadata('manifest.json')['changes']])
+        before, after = self.change('212', title='Other operations', version=2)
+        self.replica.publish_verified(after, before)
+        self.assertIn(url, self.replica.get_document(read)['content'])
+
+    def test_native_current_section_and_metadata_use_admitted_titles_only(self):
+        from unittest.mock import patch
+        from wiki_atlassian.service import WikiService
+        body = '<h2>Evidence</h2><p><ac:link><ri:page ri:content-title="Operations"/></ac:link></p>'
+        self.change('210', body)
+        self.replica.synchronize()
+        service = WikiService(self.settings, self.remote, self.replica)
+        with patch.object(self.remote, 'version', create=True, return_value={'message': ''}):
+            for options in ({'metadata': True}, {'section': '1', 'version': 1}):
+                result = service.execute('get_document', {'document': '210', **options})
+                self.assertIn('/COMMON/pages/211', result['content'])
+            with patch.object(self.remote, 'page', side_effect=AssertionError('body opened')):
+                result = service.execute('get_document', {'document': '210', 'includeBody': False, 'metadata': True})
+                self.assertEqual(1, result['version'])
+                self.assertNotIn('content', result)
+        unreconciled = Page(replace(self.remote.pages['210'].node, version=2), body)
+        self.assertIn('unresolved', self.replica.project_native_markdown(unreconciled, body, service._url('210')))
+        self.replica.deny()
+        with self.assertRaises(RemoteError) as err:
+            self.replica.project_native_markdown(self.remote.pages['210'], body, service._url('210'))
+        self.assertEqual('root_scope_denied', err.exception.code)
+
+    def test_legacy_projection_schedules_upgrade_and_staging_error_survives_cleanup(self):
+        from unittest.mock import patch
+        self.replica.synchronize()
+        manifest = self.metadata('manifest.json')
+        del manifest['titleProjectionVersion']
+        self.write_metadata('manifest.json', manifest)
+        self.assertEqual(0, self.replica.refresh_delay())
+        self.replica.synchronize()
+        self.assertEqual(1, self.metadata('manifest.json')['titleProjectionVersion'])
+        before, after = self.change('211', title='Changed', version=2)
+        with patch.object(self.replica, '_stage_page', side_effect=ValueError('injected stage failure')):
+            with self.assertRaisesRegex(ValueError, 'injected stage failure'):
+                self.replica.publish_verified(after, before)
+        self.assertEqual(1, self.replica.get_document({'document': '211'})['version'])
+        self.assertFalse(list(self.replica.control.glob('stage-*')))
+
     def test_previous_generation_is_readable_while_provider_is_waiting(self):
         self.replica.synchronize()
         self.expire()
@@ -356,12 +456,15 @@ class ReplicaTests(unittest.TestCase):
             self.assertEqual(['locked'], output)
             yield process
         finally:
-            if process.poll() is None:
-                process.terminate()
-            process.wait(timeout=5)
-            reader.join(timeout=1)
-            process.stdout.close()
-            process.stderr.close()
+            # On Windows the venv launcher and the interpreter holding the
+            # lock are separate processes. Normal exit waits for its child
+            # to release the OS handle; terminating the launcher does not.
+            try:
+                process.wait(timeout=seconds + 5)
+            finally:
+                reader.join(timeout=1)
+                process.stdout.close()
+                process.stderr.close()
 
     def test_cold_pending_failed_status_sanitized_then_success_and_shared_offline_read(self):
         self.assertEqual('pending', self.replica.status()['status'])

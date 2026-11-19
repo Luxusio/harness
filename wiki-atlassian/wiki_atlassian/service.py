@@ -113,8 +113,12 @@ class WikiService:
         if section is not None:
             require('version' in data and format != 'outline', 'invalid_section')
             body = storage.storage_section(body, section)
-        content = storage.outline(body) if format == 'outline' else storage.to_markdown(
-            body, self._url(page.node.id)) if format == 'markdown' else body
+        if format == 'markdown' and 'ri:content-title' in body:
+            content = self.replica.project_native_markdown(page, body, self._url(page.node.id))
+        elif format == 'markdown':
+            content = storage.to_markdown(body, self._url(page.node.id))
+        else:
+            content = storage.outline(body) if format == 'outline' else body
         audit = self.remote.version(page.node.id, page.node.version, scope=self.settings)
         require(audit.get('message', '') == page.version_message, 'readback_mismatch')
         if account is not None:
@@ -183,6 +187,10 @@ class WikiService:
                         self._wake_repair()
                     return result
                 if operation == 'get_document':
+                    bodyless = data.get('includeBody') is False
+                    if bodyless:
+                        require(not data.get('offset') and 'section' not in data and 'snapshot' not in data,
+                                'invalid_request', 'A metadata-only read has no section, range or search snapshot')
                     local = self.replica.get_document(data)
                     if local is not None:
                         return local
@@ -191,6 +199,17 @@ class WikiService:
                     version = data.get('version', node.version)
                     require(type(version) is int and 1 <= version <= node.version)
                     require(not data.get('offset') or 'version' in data, 'invalid_request', 'Continued reads require a native version')
+                    if bodyless:
+                        current = node if version == node.version else self.remote.historical_node(node.id, version, self.settings)
+                        result = dict(id=current.id, title=current.title, version=current.version, parentId=current.parent_id,
+                                      spaceId=current.space_id, url=self._url(current.id))
+                        if data.get('metadata'):
+                            audit = self.remote.version(current.id, version, scope=self.settings)
+                            result.update(status='read', pageId=current.id, authorId=audit.get('authorId'),
+                                          createdAt=audit.get('createdAt'), message=audit.get('message', ''))
+                        require(self.remote.require_scope(self.settings, node.id) == node, 'scope_metadata_changed')
+                        self.unchanged()
+                        return result
                     page = (self.remote.page(node.id, node, self.settings) if version == node.version
                             else self.remote.historical_page(node.id, version, self.settings))
                     result = self._result(page, data=data)
@@ -292,13 +311,15 @@ class WikiService:
             require(not data.get('allowReferenceRemoval') or modes == ['content'], 'invalid_edit')
             title = data.get('title', node.title)
             format = data.get('format', 'text' if pure_append and (logical or expected is None) else 'storage')
-            require(format in ('storage', 'text'), 'invalid_edit')
+            require(format in ('storage', 'text', 'markdown'), 'invalid_edit')
             if 'content' in data:
                 body = storage.to_storage(data['content'], format)
                 if 'section' in data:
                     require(not data.get('allowReferenceRemoval'), 'invalid_section')
                     body = storage.replace_section(before.body, data['section'], body)
                 else:
+                    if not data.get('allowReferenceRemoval'):
+                        body = storage.preserve_code_ids(before.body, body)
                     storage.require_reference_preservation(before.body, body, data.get('allowReferenceRemoval', False))
             elif 'section' in data:
                 raise RemoteError('invalid_section', 'A section edit requires content and a native version')
@@ -318,6 +339,7 @@ class WikiService:
             elif 'edits' in data or 'patch' in modes:
                 edits = data.get('edits', [{'old_text': data.get('old_text'), 'new_text': data.get('new_text')}])
                 body = storage.apply_edits(before.body, edits, format)
+                storage.require_reference_preservation(before.body, body)
             else:
                 body = before.body
         sources = self._sources(data, None if creating else id)

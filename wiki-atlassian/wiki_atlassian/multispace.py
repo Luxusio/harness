@@ -215,6 +215,10 @@ class MultiSpaceKnowledge:
 
     def _document_space(self, value, supplied=None, cached=False):
         id = self._id(value)
+        if cached and len(self.slots) == 1:
+            # The read itself checks the admitted generation and the exact page.
+            # Probing contains_document first would misroute a busy replica to native IO.
+            return next(iter(self.slots))
         existing = [key for key, slot in self.slots.items() if cached and not slot.denied and slot.replica and slot.replica.contains_document(id)]
         if len(existing) == 1:
             key = existing[0]

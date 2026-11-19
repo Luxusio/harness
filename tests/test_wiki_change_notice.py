@@ -113,7 +113,7 @@ def hook(repo, env, session="session-a", runtime="codex", prompt=False, process_
         argv = [str(SCRIPTS / "wiki_change_notice.py"), runtime]
     payload = {"session_id": session, "cwd": str(repo), "tool_name": "Read"}
     result = subprocess.run([sys.executable, "-B", *argv], cwd=process_cwd or repo, env=env,
-                            input=json.dumps(payload), text=True, capture_output=True, timeout=10)
+                            input=json.dumps(payload), encoding="utf-8", capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     if result.stdout and (runtime == "codex" or not prompt):
         return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]

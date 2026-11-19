@@ -373,6 +373,48 @@ def _failure_reason(exc, generic):
     return generic
 
 
+def antigravity_reviewer(payload, project):
+    """Render Antigravity's agent-local MCP with the same project and owned entry as the writer."""
+    from wiki_atlassian.tools import REVIEW_TOOLS
+
+    plugin = payload / 'plugin'
+    server = json.loads(safe_metadata_read(plugin / '.mcp.json', 65536))['mcpServers']['atlassian']
+    prompt = safe_metadata_read(plugin / 'agents/document-reviewer.md', 65536).decode('utf-8')
+    _, _, body = prompt.split('---', 2)
+    body = body.replace('../skills/knowledge/SKILL.md', (plugin / 'skills/knowledge/SKILL.md').as_uri())
+    connection = {'name': 'atlassian', 'command': server['command'],
+                  'args': [*server['args'], '--reviewer', '--project-root', str(project)],
+                  'cwd': str(project), 'enabledTools': list(REVIEW_TOOLS)}
+    # Each value is JSON, which is also a YAML flow value. Paths and argv remain literal.
+    fields = {'name': 'document-reviewer', 'description': 'Independently review stored project wiki revisions and repository sources.',
+              'subagent': True, 'mainAgent': False, 'inheritMcp': False, 'inheritCustomizations': False,
+              'tools': ['view_file', 'grep_search', 'call_mcp_tool', 'send_message'], 'mcpServers': [connection]}
+    header = '\n'.join(f'{key}: {json.dumps(value)}' for key, value in fields.items())
+    return (f'---\n{header}\n---\n<!-- wiki-atlassian reviewer {payload.name} -->\n' + body.lstrip()).encode('utf-8')
+
+
+def register_antigravity_reviewer(payload, project):
+    project = project.expanduser().resolve(strict=True)
+    if not project.is_dir():
+        raise ValueError('Choose the consuming project directory')
+    agents = project / '.agents/agents'
+    ensure_private_directory(agents)
+    target = agents / 'document-reviewer.md'
+    current = antigravity_reviewer(payload, project)
+    with file_lock(payload.parent / 'reviewer-registration.lock', blocking=False):
+        if os.path.lexists(_io_path(target)):
+            old = safe_metadata_read(target, 65536)
+            if old == current:
+                return target
+            marker = re.search(rb'^<!-- wiki-atlassian reviewer (0\.2\.0\+h[0-9a-f]{16}) -->$', old, re.M)
+            if not marker or antigravity_reviewer(payload.parent / marker[1].decode('ascii'), project) != old:
+                raise ValueError('Existing Antigravity reviewer differs; preserve the local definition')
+        atomic_write(target, current)
+        if safe_metadata_read(target, 65536) != current:
+            raise ValueError('Antigravity reviewer readback differs')
+    return target
+
+
 def main():
     if os.name == "nt":
         for stream in (sys.stdout, sys.stderr):
@@ -380,8 +422,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', choices=('codex', 'claude'), action='append')
     parser.add_argument('--prepare-only', action='store_true')
+    parser.add_argument('--antigravity-reviewer', metavar='PROJECT', type=Path,
+                        help='Register the project-scoped read-only Antigravity reviewer')
     args = parser.parse_args()
+    if args.antigravity_reviewer and (args.prepare_only or args.runtime):
+        parser.error('--antigravity-reviewer selects a separate registration')
     try:
+        if args.antigravity_reviewer:
+            payload = prepare(Path.home() / '.local/share/wiki-atlassian')
+            print(register_antigravity_reviewer(payload, args.antigravity_reviewer))
+            return 0
         runtimes = args.runtime or [name for name in ('codex', 'claude') if shutil.which(name)]
         if not runtimes and not args.prepare_only:
             raise ValueError('No supported host CLI found; use --prepare-only for a portable payload')

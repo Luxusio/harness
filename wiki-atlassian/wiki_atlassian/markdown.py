@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import quote, unquote_plus, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, unquote_plus, urlsplit, urlunsplit
 
 from .storage import Element, Text, parse_storage, to_storage
 
@@ -64,7 +64,7 @@ def _s3_path(value):
         return None
 
 
-def to_markdown(storage, current_page_url=None, image_path_mapping=None):
+def to_markdown(storage, current_page_url=None, image_path_mapping=None, *, resolve_title=None):
     root = parse_storage(storage)
     images = {} if image_path_mapping is None else image_path_mapping
     context = None
@@ -113,8 +113,11 @@ def to_markdown(storage, current_page_url=None, image_path_mapping=None):
                 return f'[@{_label(label or account)}]({origin}/wiki/people/{quote(account, safe="")})'
             legacy = [name.removeprefix('ri:') + '=' + value for name in ('ri:userkey', 'ri:username') if (value := bounded(name))]
             return ('@' + _label(label) + ' ' if label else '') + '(Confluence user: ' + (_label('; '.join(legacy)) + '; unresolved' if legacy else 'unresolved') + ')'
+        current_space = re.fullmatch(r'/wiki/spaces/([^/]+)/pages/[1-9][0-9]*(?:/.*)?', context.path) if context else None
+        if (page is not None and title and not page_id and resolve_title is not None
+                and current_space and (not space or space == unquote(current_space[1]))):
+            page_id = resolve_title(title) or ''
         if page is not None and re.fullmatch(r'[1-9][0-9]*', page_id):
-            current_space = re.fullmatch(r'/wiki/spaces/([^/]+)/pages/[1-9][0-9]*(?:/.*)?', context.path) if context else None
             selected_space = quote(space, safe='') if space else current_space[1] if current_space else None
             path = f'/wiki/spaces/{selected_space}/pages/{page_id}' if selected_space else f'/wiki/pages/viewpage.action?pageId={page_id}'
             return f'[{rendered}]({origin}{path}{fragment})'

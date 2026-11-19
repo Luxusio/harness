@@ -11,7 +11,7 @@ import uuid
 
 from . import __version__
 from .models import RemoteError, compact_json
-from .tools import WIKI_TOOLS, validate_arguments
+from .tools import REVIEW_TOOLS, WIKI_TOOLS, validate_arguments
 
 
 MAX_LINE = 1024 * 1024
@@ -25,11 +25,14 @@ def valid_id(value):
 
 
 class Server:
-    def __init__(self, documents=None, personal=None, project_unavailable=False):
-        self.documents, self.personal = documents, personal
+    def __init__(self, documents=None, personal=None, project_unavailable=False, *, reviewer=False):
+        self.documents, self.personal = documents, None if reviewer else personal
+        self.reviewer = reviewer
         self.project_unavailable = project_unavailable
         self.tools = ([*WIKI_TOOLS] if documents is not None or personal is not None
                       else [WIKI_TOOLS[0]] if project_unavailable else [])
+        if reviewer:
+            self.tools = [tool for tool in self.tools if documents is not None and tool['name'] in REVIEW_TOOLS]
         self._receipts = {}
         self._receipt_lock = threading.Lock()
         self._submit_update = None
@@ -146,6 +149,8 @@ class Server:
                             'Use the same tools with connection: personal for the separate privately configured page. '
                             'Discover its page ID with connection_status(connection: personal). Personal access covers that exact page and its comments, never descendants. '
                             'Omitting connection selects project; unavailable connections never borrow credentials.')
+            if self.reviewer:
+                instructions = 'Read stored project evidence and its sources with the available document review tools.'
             return self.result(id, {'protocolVersion': '2024-11-05', 'serverInfo': {'name': 'atlassian', 'version': __version__},
                                     'capabilities': {'tools': {}}, 'instructions': instructions})
         if method == 'ping':

@@ -28,6 +28,7 @@ READ_RANGE = {
     'document': field(S, 'Native page ID or URL'), 'version': field(I), 'offset': field(I, default=0),
     'length': bounded_integer(1, 12000, 'Unicode characters, maximum 12000', 4000),
     'format': field(S, default='markdown'), 'section': field(S), 'snapshot': field(S),
+    'includeBody': field(B, 'Set false to read document identity and version without loading or returning the body.'),
     'preferReplica': field(B, 'Use the admitted published snapshot for current outline or section reads'), **SPACE,
 }
 
@@ -47,6 +48,8 @@ def tool(name, description, properties, required=(), either=()):
     return schema
 
 
+REVIEW_TOOLS = ('get_document', 'search_documents', 'document_relations', 'list_document_versions')
+
 WIKI_TOOLS = [
     tool('connection_status', 'Show readiness, scope and synchronization errors for each configured space. Partial readiness is not complete coverage.', {}),
     tool('search_documents', 'Search under the project wiki root. Use queries for several related terms in one space; each group returns exact evidence locators.', {
@@ -60,12 +63,13 @@ WIKI_TOOLS = [
         'reads': batch({'type': O, 'properties': READ_RANGE, 'required': ['document'], 'additionalProperties': False},
                        'Ranges from one admitted snapshot, e.g. [{"document": "123", "length": 2000}]. Up to 24,000 characters total.'),
     }, either=('document', 'reads')),
-    tool('create_document', 'Create under a native parent or explicit space, one mutation with verified native readback.', {
+    tool('create_document', 'Create from markdown, storage or text under a native parent or explicit space in one verified write.', {
         'parent': field(S), 'title': field(S), 'content': field(S), 'format': field(S), **BODY,
         'basedOn': field(A), **SPACE}, ['title', 'content']),
     tool('update_document', 'Use one exact versioned body edit or a pure append. Use defer only for an independent versioned update, then check operation_status for the verified result.', {
         **{name: field(S) for name in ('document', 'content', 'title', 'old_text', 'new_text', 'append', 'format', 'parent', 'section')},
-        'version': field(I), **BODY, 'edits': field(A), 'allowReferenceRemoval': field(B, default=False),
+        'version': field(I), **BODY, 'edits': field(A, 'Use exact old_text/new_text blocks or op insert_before_heading, insert_after_heading, replace_section (section key or unique heading, content), or replace_code (old_text/new_text, optional macro_id).'),
+        'allowReferenceRemoval': field(B, default=False),
         'basedOn': field(A), 'links': field(O),
         'defer': field(B, 'Queue an explicit document and version and return a session-local operation ID'), **SPACE}),
     tool('operation_status', 'Check a deferred update in the same MCP session and connection. Queued and running are not stored outcomes.', {
@@ -97,7 +101,7 @@ def validate_arguments(name, arguments):
         if 'queries' in arguments and 'cursor' in arguments:
             raise RemoteError('invalid_request', 'Use a single query to continue a search')
     if 'reads' in result:
-        if sum(row['length'] for row in result['reads']) > MAX_BATCH_READ_CHARS:
+        if sum(row['length'] for row in result['reads'] if row.get('includeBody') is not False) > MAX_BATCH_READ_CHARS:
             raise RemoteError('invalid_request', 'Read at most 24,000 characters per batch')
         return {key: result[key] for key in arguments}
     if name == 'search_documents':

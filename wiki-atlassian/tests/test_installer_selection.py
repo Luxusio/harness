@@ -5,8 +5,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
+import yaml
 
 
 @pytest.fixture
@@ -22,6 +24,56 @@ def installer(tmp_path, monkeypatch):
     monkeypatch.setenv('CODEX_HOME', str(home))
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(home))
     return module, payload, home
+
+
+def test_registered_reviewers_allow_only_document_reads(installer, tmp_path):
+    from wiki_atlassian.protocol import Server
+
+    module, payload, _ = installer
+    project = tmp_path / 'review project'
+    module.ensure_private_directory(project)
+    plugin = payload / 'plugin'
+    module.ensure_private_directory(plugin / 'agents')
+    source = (module.ROOT / 'agents/document-reviewer.md').read_bytes()
+    module.atomic_write(plugin / 'agents/document-reviewer.md', source)
+    transport = {'command': sys.executable, 'args': ['-I', '-B', 'launch.py'], 'env': {'NOT_FOR_AGENT': 'private-test'}}
+    module.atomic_write(plugin / '.mcp.json', json.dumps({'mcpServers': {'atlassian': transport}}).encode())
+
+    expected = {'get_document', 'search_documents', 'document_relations', 'list_document_versions'}
+    claude = yaml.safe_load(source.decode().split('---', 2)[1])['tools'].split(', ')
+    assert set(claude) == {'Read', 'Glob', 'Grep'} | {'mcp__plugin_wiki-atlassian_atlassian__' + tool for tool in expected}
+    artifact = module.register_antigravity_reviewer(payload, project)
+    assert artifact == project / '.agents/agents/document-reviewer.md'
+    body = artifact.read_text(encoding='utf-8')
+    agent = yaml.safe_load(body.split('---', 2)[1])
+    assert agent['inheritMcp'] is False and agent['inheritCustomizations'] is False
+    assert set(agent['tools']) == {'view_file', 'grep_search', 'call_mcp_tool', 'send_message'}
+    remote, = agent['mcpServers']
+    assert set(remote['enabledTools']) == expected
+    assert remote['command'] == sys.executable and remote['cwd'] == str(project)
+    assert remote['args'] == [*transport['args'], '--reviewer', '--project-root', str(project)]
+    assert 'private-test' not in body
+    assert module.register_antigravity_reviewer(payload, project) == artifact
+    artifact.write_text(body + '\nLocal instructions.\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='differs'):
+        module.register_antigravity_reviewer(payload, project)
+    assert artifact.read_text(encoding='utf-8').endswith('Local instructions.\n')
+
+    class Docs:
+        def execute(self, name, args):
+            assert name == 'get_document'
+            return {'id': args['document'], 'version': 7}
+
+    server = Server(Docs(), personal=lambda *_: pytest.fail('private scope'), reviewer=True)
+    def request(method, **params):
+        return server.handle({'id': 1, 'jsonrpc': '2.0', 'method': method, 'params': params})
+    assert {tool['name'] for tool in request('tools/list')['result']['tools']} == expected
+    read = request('tools/call', name='get_document', arguments={'document': '42'})
+    assert json.loads(read['result']['content'][0]['text'])['version'] == 7
+    private = request('tools/call', name='get_document', arguments={'document': '42', 'connection': 'personal'})
+    assert json.loads(private['result']['content'][0]['text'])['code'] == 'connection_unavailable'
+    for write in ('create_document', 'update_document', 'create_comment', 'update_comment'):
+        assert request('tools/call', name=write, arguments={})['error']['code'] == -32602
 
 
 @pytest.mark.parametrize('runtime', ['codex', 'claude'])

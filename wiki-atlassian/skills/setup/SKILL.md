@@ -121,7 +121,9 @@ them unset until the user chooses existing destinations. Reuse the documented
 poll default unless the user requested another interval.
 
 When Harness is used, identify its actual Python interpreter from installed
-hook registration and verify PyYAML with that interpreter. Install the optional
+hook registration and verify PyYAML with that interpreter. For wiki Markdown
+authoring verify `import markdown_it` in the registered wiki Python and install
+`markdown-it-py>=4,<5` there when needed. Install the optional
 prerequisite through the available authorized package-manager flow when needed;
 checking an unrelated agent venv is insufficient. Report the exact blocker if
 unavailable; do not claim YAML routing or fall back to local document writes.

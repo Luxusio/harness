@@ -282,11 +282,16 @@ def _section_references(body):
     return result
 
 
-def replace_section(body, key, replacement):
+def _section_replacement(body, key, replacement):
     start, end = section_range(body, key)
     previous, fresh = _section_references(body[start:end]), _section_references(replacement)
     if previous - fresh:
         _error('section_reference_removal', 'Section replacement would change or remove an image, attachment, macro, anchor or inline comment')
+    return start, end, replacement
+
+
+def replace_section(body, key, replacement):
+    start, end, _ = _section_replacement(body, key, replacement)
     return body[:start] + replacement + body[end:]
 
 
@@ -295,17 +300,20 @@ def _inline_text(text):
 
 
 def to_storage(text, format='storage'):
-    if not isinstance(text, str) or format not in ('storage', 'text'):
-        _error('invalid_request', 'Use storage or text for new content')
+    if not isinstance(text, str) or format not in ('storage', 'text', 'markdown'):
+        _error('invalid_request', 'Use storage, text or markdown for new content')
     if format == 'storage':
         return text
     if not text.strip():
         _error('invalid_request', 'New text must not be blank')
+    if format == 'markdown':
+        from .authoring import markdown_storage
+        return markdown_storage(text)
     return ''.join('<p>' + _inline_text(part) + '</p>' for part in text.replace('\r\n', '\n').replace('\r', '\n').split('\n\n'))
 
 
 def _patches(body, patches, code='patch_overlap'):
-    patches.sort(key=lambda item: item[0])
+    patches.sort(key=lambda item: item[:2])
     if any(left[1] > right[0] for left, right in zip(patches, patches[1:])):
         _error(code, 'Edit ranges must not overlap')
     for start, end, replacement in reversed(patches):
@@ -321,17 +329,102 @@ def _occurrences(text, selection, overlapping=False):
     return count
 
 
+def _heading_patch(body, root, edit, format):
+    locator = 'section' if 'section' in edit else 'heading'
+    if set(edit) != {'op', locator, 'content'} or not edit[locator].strip():
+        _error('invalid_edit', 'Specify one section position or unique heading title and content')
+    headings = _headings(root)
+    matches = [(key, node) for key, node in headings if
+               (key if locator == 'section' else ' '.join(node.text().split())) == edit[locator]]
+    if len(matches) != 1:
+        _error('section_not_found' if not matches else 'patch_ambiguous',
+               'Use the unique heading title or versioned outline position', matchCount=len(matches))
+    key, heading = matches[0]
+    content = to_storage(edit['content'], format)
+    parse_storage(content, 'section_context_required')
+    if edit['op'] == 'replace_section':
+        return _section_replacement(body, key, content)
+    position = heading.start if edit['op'] == 'insert_before_heading' else heading.end
+    return position, position, content
+
+
+def _code_macros(root):
+    return [e for e in root.descendants() if e.tag in ('ac:macro', 'ac:structured-macro')
+            and e.attrs.get('ac:name') == 'code' and not _hidden(e, _UNSELECTABLE)]
+
+
+def _literal_code_edit(macros, edit, pending):
+    if set(edit) - {'op', 'macro_id', 'old_text', 'new_text'} or not edit.get('old_text') or 'new_text' not in edit:
+        _error('invalid_edit', 'Specify a literal old_text/new_text and optional macro_id')
+    if 'macro_id' in edit:
+        macros = [m for m in macros if edit['macro_id'] and m.attrs.get('ac:macro-id') == edit['macro_id']]
+        if len(macros) != 1:
+            _error('patch_not_found' if not macros else 'patch_ambiguous', 'Select one existing code macro ID')
+    count = 0
+    for macro in macros:
+        literals = [n for n in macro.children if isinstance(n, Element) and n.tag == 'ac:plain-text-body']
+        if len(literals) != 1 or not all(isinstance(n, Text) and n.kind in ('text', 'cdata') for n in literals[0].children):
+            continue
+        node = literals[0]
+        source = node.text()
+        hits = _occurrences(source, edit['old_text'], True)
+        if hits:
+            count += hits
+            start = source.find(edit['old_text'])
+            match = node, (start, start + len(edit['old_text']), edit['new_text'])
+    if count != 1:
+        _error('patch_not_found' if not count else 'patch_ambiguous', 'Select one literal code occurrence', matchCount=count)
+    node, patch = match
+    pending.setdefault(node, []).append(patch)
+
+
+def _storage_patch(body, blocks, old, new, index):
+    count = _occurrences(body, old, True)
+    if count > 1:
+        _error('patch_ambiguous', 'old_text must identify exactly one native range', matchCount=count, editIndex=index)
+    matches = []
+    opening = _NAME.match(old, 1) if old.startswith('<') else None
+    for element in blocks:
+        if opening:
+            if opening[0].lower() != element.tag:
+                continue
+            start, end = element.start, element.end
+        elif element.children and all(isinstance(n, Text) and n.kind in ('text', 'cdata') for n in element.children):
+            start, end = element.open_end, element.close_start
+        else:
+            continue
+        if equivalent(body[start:end], old):
+            matches.append((start, end, new))
+    if len(matches) == 1 and (not count or matches[0][0] == body.find(old)):
+        return matches[0]
+    if matches:
+        _error('patch_ambiguous', 'Multiple native ranges match the selection', matchCount=max(2, len(matches)), editIndex=index)
+    if count:
+        _error('patch_context_required', 'old_text must select a complete block or its entire plain text', editIndex=index)
+    _error('patch_not_found', 'old_text does not match a native range', matchCount=0, editIndex=index)
+
+
 def apply_edits(body, edits, format='storage'):
-    if format not in ('storage', 'text') or not isinstance(edits, list) or not 1 <= len(edits) <= 20:
-        _error('invalid_edit', 'edits must contain 1..20 old_text/new_text objects')
+    if format not in ('storage', 'text', 'markdown') or not isinstance(edits, list) or not 1 <= len(edits) <= 20:
+        _error('invalid_edit', 'Supply 1..20 supported edit objects')
     root = parse_storage(body, 'patch_context_required')
     blocks = [e for e in root.descendants() if e.tag in _BLOCKS and not e.self_closing and not _hidden(e, _LITERAL)]
     simple = [(e, ''.join(child.text() if isinstance(child, Text) else '\n' for child in e.children)) for e in blocks if e.children and all(isinstance(child, Text) and child.kind == 'text' or isinstance(child, Element) and child.tag == 'br' and not child.children for child in e.children)]
-    patches = []
+    patches, code_edits = [], {}
     for index, edit in enumerate(edits):
-        if not isinstance(edit, dict) or set(edit) != {'old_text', 'new_text'} or not all(isinstance(v, str) for v in edit.values()) or not edit['old_text']:
+        if not isinstance(edit, dict) or not all(isinstance(v, str) for v in edit.values()):
+            _error('invalid_edit', 'An edit must be an object of strings', editIndex=index)
+        if edit.get('op') in ('insert_before_heading', 'insert_after_heading', 'replace_section'):
+            patches.append(_heading_patch(body, root, edit, format))
+            continue
+        if edit.get('op') == 'replace_code':
+            _literal_code_edit(_code_macros(root), edit, code_edits)
+            continue
+        if set(edit) != {'old_text', 'new_text'} or not edit['old_text']:
             _error('invalid_edit', 'Each edit must contain exactly nonempty old_text and new_text strings', editIndex=index)
         old, new = edit['old_text'], edit['new_text']
+        if format == 'markdown':
+            _error('invalid_edit', 'Match an existing block with storage or text. Use a heading selector for new Markdown.')
         if format == 'text':
             matches = [e for e, text in simple if text == old]
             count = len(matches)
@@ -340,15 +433,10 @@ def apply_edits(body, edits, format='storage'):
             element = matches[0]
             patches.append((element.open_end, element.close_start, _inline_text(new)))
         else:
-            count = _occurrences(body, old, True)
-            if count != 1:
-                _error('patch_not_found' if count == 0 else 'patch_ambiguous', 'old_text must match exactly once in current storage', matchCount=count, editIndex=index)
-            start = body.find(old)
-            end = start + len(old)
-            complete = any((e.start == start and e.end == end) or (e.children and all(isinstance(c, Text) and c.kind in ('text', 'cdata') for c in e.children) and e.open_end == start and e.close_start == end) for e in blocks)
-            if not complete:
-                _error('patch_context_required', 'old_text must select a complete block or its entire plain text', editIndex=index)
-            patches.append((start, end, new))
+            patches.append(_storage_patch(body, blocks, old, new, index))
+    for node, changes in code_edits.items():
+        literal = _patches(node.text(), changes).replace(']]>', ']]]]><![CDATA[>')
+        patches.append((node.open_end, node.close_start, '<![CDATA[' + literal + ']]>'))
     return _patches(body, patches)
 
 
@@ -371,6 +459,47 @@ def references(body):
         elif e.tag in ('ac:structured-macro', 'ac:macro'):
             result['macros', (e.attrs.get('ac:name', ''), e.attrs.get('ac:macro-id', ''))] += 1
     return result
+
+
+def _code_keys(body, nodes):
+    """A unique identical block, or a unique authored code title, can identify a block across revisions."""
+    index = {}
+    for node in nodes:
+        identity = list(_retained_identity(body, node))
+        kind, name, attributes, closed = identity[0]
+        authored = tuple(sorted((k, v) for k, v in attributes if k != 'ac:macro-id' and (k, v) != ('ac:schema-version', '1')))
+        identity[0] = (kind, name, authored, closed)
+        index.setdefault(('block', tuple(identity)), []).append(node)
+        titles = [n.text() for n in node.children if isinstance(n, Element)
+                  and n.tag == 'ac:parameter' and n.attrs.get('ac:name') == 'title']
+        if len(titles) == 1 and titles[0].strip():
+            index.setdefault(('title', titles[0]), []).append(node)
+    return index
+
+
+def preserve_code_ids(before, after):
+    """Restore omitted provider IDs only when both revisions identify the same code block."""
+    old_root, new_root = parse_storage(before), parse_storage(after)
+    old, new = _code_macros(old_root), _code_macros(new_root)
+    if not any('ac:macro-id' in n.attrs for n in old) or not any('ac:macro-id' not in n.attrs for n in new):
+        return after
+    old_ids = Counter(n.attrs['ac:macro-id'] for n in old_root.descendants() if 'ac:macro-id' in n.attrs)
+    taken = {n.attrs['ac:macro-id'] for n in new_root.descendants() if 'ac:macro-id' in n.attrs}
+    originals, replacements = _code_keys(before, old), _code_keys(after, new)
+    patches, used = [], set()
+    for key, candidates in originals.items():
+        targets = replacements.get(key, [])
+        if len(candidates) != 1 or len(targets) != 1:
+            continue
+        source, target = candidates[0], targets[0]
+        macro_id = source.attrs.get('ac:macro-id')
+        if not macro_id or old_ids[macro_id] != 1 or macro_id in taken or target in used or 'ac:macro-id' in target.attrs:
+            continue
+        position = target.open_end - (2 if target.self_closing else 1)
+        patches.append((position, position, ' ac:macro-id="' + escape(macro_id, quote=True) + '"'))
+        taken.add(macro_id)
+        used.add(target)
+    return _patches(after, patches)
 
 
 def require_reference_preservation(before, after, allow_removal=False):

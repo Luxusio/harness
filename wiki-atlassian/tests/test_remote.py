@@ -250,6 +250,9 @@ def test_real_tls_scoped_read_inventory_history_and_native_user(native):
         assert remote.require_page_version(page)['number'] == 1
         assert remote.list_versions('11', scope=settings)['results'][0]['authorId'] == 'account'
         assert remote.historical_page('11', 1, settings).body == page.body
+        start = len(state.calls)
+        assert remote.historical_node('11', 1, settings) == page.node
+        assert not any('body-format' in query for _, _, query, _ in state.calls[start:])
     assert all(call[0] == 'GET' for call in state.calls)
 
 

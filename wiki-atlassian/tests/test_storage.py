@@ -321,7 +321,10 @@ def test_page_readback_tolerates_only_existing_positive_versions_and_added_nativ
     assert not native_page_readback(supplied.replace('12345678-1234-1234-1234-123456789abc', '22345678-1234-1234-1234-123456789abc'), supplied)
 
 
-def test_plain_text_new_content_is_literal_and_storage_is_not_markdown():
+def test_plain_text_remains_literal_and_markdown_is_explicit():
     assert to_storage('A <B>&\r\nline\n\nNext **literal**', 'text') == '<p>A &lt;B&gt;&amp;<br />line</p><p>Next **literal**</p>'
-    error('invalid_request', lambda: to_storage('# Heading', 'markdown'))
+    assert to_storage('# Heading', 'markdown').strip() == '<h1>Heading</h1>'
+    image = to_storage('![A & B](https://example.org/image.png "Title")', 'markdown')
+    assert 'ac:title="Title"' in image and 'ac:alt="A &amp; B"' in image
+    error('invalid_request', lambda: to_storage('# Heading', 'unknown'))
     error('invalid_request', lambda: to_storage(' \n', 'text'))

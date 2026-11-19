@@ -156,6 +156,11 @@ admitted snapshot. The publication transaction is exclusive. Normal writes
 update the existing replica without another refresh call. A remote success
 with local failure is distinct from a failed or uncertain remote write.
 
+Create a page or submit a versioned content update with `format: "markdown"`
+to publish headings, tables, links, block quotes and fenced code in one
+Confluence version. Fences become native code macros. Raw HTML in Markdown
+is literal text. Use storage for existing rich markup and native attachments.
+
 Read requests can run while native edits are in progress. For independent
 work, call `update_document` with an exact `document`, `version`, and
 `defer: true`. The resulting operation ID is session-local. A queued or
@@ -304,7 +309,8 @@ publication still uses the selected Confluence scope and native permissions.
 
 ## Install the Python runtime
 
-Install mise and a managed Python 3.12 or later with PyYAML. The installer
+Install mise and a managed Python 3.12 or later with PyYAML. For Markdown
+authoring, install `markdown-it-py>=4,<5` in the same interpreter. The installer
 validates the managed base interpreter and registers its resolved executable;
 it never captures a project virtual environment or falls back to PATH Python.
 PyYAML must exist in that selected interpreter, regardless of which Python
@@ -314,6 +320,20 @@ starts the installer. From this directory, run:
 python install.py --runtime codex
 python install.py --runtime claude
 ```
+
+Claude Code loads the bundled `wiki-atlassian:document-reviewer` with four
+enumerated MCP reads. Codex's plugin manifest registers skills and MCP; its
+custom agent roles are configured separately by the host.
+
+For an Antigravity workspace, run `python install.py --antigravity-reviewer PROJECT`
+from this directory, substituting the path to the consuming project. This
+registers `.agents/agents/document-reviewer.md` for that workspace. Keep
+that one machine-specific file in the repository's local Git exclude.
+After reloading Antigravity, select `document-reviewer` to inspect revisions.
+The role uses the managed project launcher, project authentication and four
+read operations. Writes and the personal inbox are unavailable to this MCP
+process. Edited definitions are preserved. Workspace registration requires
+a trusted path for the executable agent definition.
 
 These commands also run in native Windows PowerShell. The selected host CLI
 must be installed on PATH; its native executable or packaged Node entrypoint

@@ -114,7 +114,9 @@ def execute_personal(operation, data, deadline):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Native Python Atlassian wiki MCP (stdio)')
     parser.add_argument('--project-root', type=Path, default=Path.cwd())
-    parser.add_argument('--personal-operation', action='store_true', help=argparse.SUPPRESS)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--personal-operation', action='store_true', help=argparse.SUPPRESS)
+    modes.add_argument('--reviewer', action='store_true', help='Serve the four project-only document review operations')
     args = parser.parse_args(argv)
     if not args.project_root.is_absolute() or not args.project_root.is_dir():
         parser.error('--project-root must be an existing absolute startup directory')
@@ -138,7 +140,7 @@ def main(argv=None):
     import personal_feedback
     home = home_directory()
     private_path = home / '.config/harness/feedback.yaml'
-    personal = personal_operation if os.path.lexists(private_path) else None
+    personal = personal_operation if not args.reviewer and os.path.lexists(private_path) else None
     documents = None
     unavailable = False
     try:
@@ -154,7 +156,7 @@ def main(argv=None):
             from .remote import Remote
             from .multispace import MultiSpaceKnowledge
             documents = MultiSpaceKnowledge(project, Remote(project.credentials))
-        Server(documents, personal, unavailable).run()
+        Server(documents, personal, unavailable, reviewer=args.reviewer).run()
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
         if documents is not None:

@@ -846,15 +846,23 @@ class Remote:
             self._verify(scope, observed)
         return result
 
-    def historical_page(self, page_id, version, scope):
+    def _historical(self, page_id, version, scope, *, body):
         observed = self.ancestry(scope, page_id)
         _need(type(version) is int and 1 <= version <= observed[0].version, 'invalid_request', 'Invalid native historical version')
         with self._scope_errors(scope, page_id):
-            raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + page_id, {'body-format': 'storage', 'version': version}))[1]
-        result = self._parse_page(raw, page_id, current=False)
-        _need(result.node.version == version and result.node.space_id == observed[0].space_id and result.node.status in ('current', 'historical'), 'identity_mismatch', 'Historical page identity differs')
+            query = {'version': version, **({'body-format': 'storage'} if body else {})}
+            raw = self._request('GET', self._endpoint('/wiki/api/v2/pages/' + page_id, query))[1]
+        result = self._parse_page(raw, page_id, current=False) if body else self._parse_node(raw, 'page', page_id, current=False)
+        node = result.node if body else result
+        _need(node.version == version and node.space_id == observed[0].space_id and node.status in ('current', 'historical'), 'identity_mismatch', 'Historical page identity differs')
         self._verify(scope, observed)
         return result
+
+    def historical_node(self, page_id, version, scope):
+        return self._historical(page_id, version, scope, body=False)
+
+    def historical_page(self, page_id, version, scope):
+        return self._historical(page_id, version, scope, body=True)
 
     def ensure_no_draft(self, id, expected_node=None, scope=None):
         from .storage import equivalent

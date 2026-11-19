@@ -113,6 +113,28 @@ def service(tmp_path):
     return WikiService(settings, remote, replica), remote, replica
 
 
+@pytest.mark.parametrize('operation', ['create_document', 'update_document'])
+def test_large_markdown_is_one_verified_native_version(service, operation):
+    api, remote, _ = service
+    note = ('긴 검토 결과와 근거를 기록합니다. ' * 1150).rstrip()
+    markdown = ('# 검토\n\n> quoted\n\n| 항목 | 근거 |\n|---|---|\n'
+                '| **결과** | [기록](https://wiki.invalid/a) |\n\n'
+                '```sql\nselect \'<&]]>\';\n```\n\n<x-literal>\n\n' + note)
+    assert 30000 <= len(markdown.encode()) <= 60000
+    target = {'parent': '1', 'title': '검토'} if operation == 'create_document' else {'document': '2', 'version': 1}
+    result = api.execute(operation, {**target, 'format': 'markdown', 'content': markdown})
+    assert result['status'] in ('created', 'updated')
+    assert result['version'] == (1 if operation == 'create_document' else 2)
+    assert remote.writes == [remote.body]
+    from wiki_atlassian.storage import parse_storage
+    root = parse_storage(remote.body)
+    nodes = list(root.descendants())
+    assert {'h1', 'blockquote', 'table', 'th', 'td', 'strong', 'a'} <= {n.tag for n in nodes}
+    assert any(n.tag == 'a' and n.attrs['href'] == 'https://wiki.invalid/a' for n in nodes)
+    assert next(n for n in nodes if n.tag == 'ac:plain-text-body').text() == "select '<&]]>';\n"
+    assert '&lt;x-literal&gt;' in remote.body and note in remote.body
+
+
 def test_text_update_saves_once_and_returns_native_storage(service):
     api, remote, replica = service
     result = api.execute('update_document', {'document': '2', 'version': 1, 'content': 'New 😀', 'format': 'text', 'includeBody': True})

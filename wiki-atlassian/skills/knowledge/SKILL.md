@@ -51,6 +51,12 @@ partial search coverage before treating missing results as absent knowledge.
 
 For edits, read the actual version and use the smallest supported unambiguous
 native edit. Never roundtrip an entire Markdown projection over rich storage.
+Use `get_document` with `includeBody: false` when only the revision is needed.
+For a versioned insertion, read the outline and address the heading with an
+`edits` item such as `{"op":"insert_before_heading","section":"2","content":"<p>New evidence</p>"}`.
+Use `replace_code` with the exact old and new literal text for code inside
+one macro. For new authored material, `format: "markdown"` accepts tables
+and fenced code in a single create or versioned update.
 Preserve macros, images, anchors, inline markers and unrelated content. Follow
 conflict/unknown responses; an uncertain write is not permission to retry.
 Verified remote success with local publication failure requires replica recovery,
@@ -68,6 +74,15 @@ The agent that learned the facts writes the knowledge. For substantive knowledge
 consolidation, correction or migration, use the independent document reviewer at
 `../../agents/document-reviewer.md`; a short source append does not require a
 new development workflow. No WBS/Jira issue is required for ordinary wiki work.
+Claude Code discovers the bundled `wiki-atlassian:document-reviewer` agent.
+Antigravity discovers the workspace role created by
+`python wiki-atlassian/install.py --antigravity-reviewer PROJECT`. Reload the
+project after registration and select `document-reviewer`. Its MCP uses the same
+managed project launcher with a project-only read scope.
+For another host, delegate only when it exposes a reviewer restricted to local
+source reads and the four named wiki reads. If the host cannot provide that
+tool surface, report the independent review as BLOCKED_ENV with the missing
+capability. A prompt given to a general-purpose agent cannot enforce this limit.
 
 ## Record and reuse source material
 
