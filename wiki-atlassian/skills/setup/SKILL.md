@@ -127,9 +127,14 @@ checking an unrelated agent venv is insufficient. Report the exact blocker if
 unavailable; do not claim YAML routing or fall back to local document writes.
 Runtime hooks never install dependencies.
 
-Load authentication through mise and start the actual host in the selected
-project. The MCP snapshots project YAML and injected credentials; creating or
-editing either file does not reload it. Reconnect through the host's available
+Start the actual host in the selected project. At MCP startup, an existing
+project-root `mise.local.toml` supplies all three authentication fields through
+bounded `mise env --json-extended` evaluation with exact file provenance. Confirm
+the file is already trusted and owner-private. Runtime does not grant trust.
+Ordinary Desktop startup requires no shell activation. With no local file,
+complete injected credentials remain supported for CLI and CCC.
+The MCP snapshots project YAML and resolved credentials; creating or editing
+either file does not reload it. Reconnect through the host's available
 controls. When the host cannot
 reload in place, provide the exact restart command and keep host verification
 pending. A separate smoke process establishes only that process's result.

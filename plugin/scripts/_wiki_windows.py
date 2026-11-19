@@ -432,6 +432,27 @@ def safe_read(path, limit, private=False):
     return _read(path, limit, "private" if private else None)
 
 
+@contextmanager
+def private_source(path, limit):
+    """Hold ordinary ancestry and a private leaf while a provider reads it."""
+    if type(limit) is not int or limit < 0:
+        raise ValueError("Nonnegative byte limit required")
+    path = _path(path)
+    with _walk(path.parent, owner_neutral=True):
+        handle = _open(path, GENERIC_READ, share=FILE_SHARE_READ, owner_neutral=True)
+        try:
+            security = _security(handle, "private")
+            before = _metadata_free_stamp(handle)
+            if before[3] > limit:
+                raise ValueError("Private source exceeds byte limit")
+            data = b"".join(_file_chunks(handle, limit))
+            yield data
+            if _metadata_free_stamp(handle) != before or _security(handle, "private") != security:
+                raise ValueError("Private source changed during evaluation")
+        finally:
+            _close(handle)
+
+
 def safe_metadata_read(path, limit):
     """Owner-owned, nonforeign-writable cache metadata; public read is allowed."""
     return _read(path, limit, "metadata")

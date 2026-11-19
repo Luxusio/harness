@@ -23,6 +23,58 @@ sys.path.insert(0, str(SCRIPTS))
 import wiki_platform as platform
 
 
+def test_private_source_retains_exact_owner_private_input_and_bounds(tmp_path):
+    root = platform.ensure_private_directory(tmp_path / "project")
+    path = root / "mise.local.toml"
+    platform.atomic_write(path, b"synthetic-only")
+    with platform.private_source(path, 14) as data:
+        assert data == b"synthetic-only"
+    with pytest.raises(ValueError):
+        with platform.private_source(path, 3):
+            pytest.fail("Oversize input must be refused before the provider runs")
+    link = root / "alias"
+    os.link(path, link)
+    with pytest.raises(ValueError):
+        with platform.private_source(path, 14):
+            pytest.fail("Credential hardlinks must be refused")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mutable file and mode checks")
+def test_private_source_rejects_mutation_symlinks_and_public_read(tmp_path):
+    path = tmp_path / "mise.local.toml"
+    path.write_bytes(b"before")
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="changed"):
+        with platform.private_source(path, 20):
+            path.write_bytes(b"changed")
+    path.chmod(0o644)
+    with pytest.raises(ValueError, match="Owner-private"):
+        with platform.private_source(path, 20):
+            pytest.fail("Readable secret must be refused")
+    path.chmod(0o600)
+    alias = tmp_path / "alias"
+    alias.symlink_to(path)
+    with pytest.raises(OSError):
+        with platform.private_source(alias, 20):
+            pytest.fail("Linked secret must be refused")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Native ancestry replacement is blocked by retained handles")
+def test_private_source_detects_project_directory_replacement(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    target = project / "mise.local.toml"
+    target.write_bytes(b"original")
+    target.chmod(0o600)
+    with pytest.raises(ValueError, match="changed"):
+        with platform.private_source(target, 20) as data:
+            assert data == b"original"
+            project.rename(tmp_path / "original-project")
+            project.mkdir()
+            target.write_bytes(b"replacement")
+            target.chmod(0o600)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX private stdin pump; Native Job stdin has its own regressions")
 def test_private_helper_stdin_pumps_while_stdout_is_backpressured(tmp_path):
     payload = "한글😀".encode() * 100000

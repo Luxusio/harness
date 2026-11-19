@@ -78,6 +78,30 @@ def test_native_private_acl_unicode_atomic_snapshot_and_bound(private):
     assert not list(private.glob(".wiki-*"))
 
 
+def test_native_project_private_source_keeps_leaf_privacy_in_ordinary_ancestry(private):
+    parent = private / "ordinary-checkout"
+    parent.mkdir()
+    target = parent / "mise.local.toml"
+    win.atomic_write(target, b"synthetic-only")
+    _acl(parent, "(A;;FW;;;WD)")
+    try:
+        with pytest.raises(ValueError):
+            win.safe_read(target, 100, private=True)
+        with win.private_source(target, 100) as data:
+            assert data == b"synthetic-only"
+            with pytest.raises(OSError):
+                target.write_bytes(b"mutated")
+            with pytest.raises(OSError):
+                target.rename(parent / "moved")
+        _acl(target, "(A;;FR;;;WD)")
+        with pytest.raises(ValueError):
+            with win.private_source(target, 100):
+                pytest.fail("The credential leaf still requires confidentiality")
+    finally:
+        _acl(target, "")
+        _acl(parent, "")
+
+
 def test_native_deep_metadata_probe_names_and_exact_retirement(private):
     from wiki_platform import metadata_probe, metadata_names, metadata_remove, metadata_remove_empty
     root = private

@@ -2,6 +2,7 @@
   "mcpServers": {
     "atlassian": {
       "command": "mise",
+      "startup_timeout_sec": 20,
       "args": [
         "exec",
         "python@3.12",

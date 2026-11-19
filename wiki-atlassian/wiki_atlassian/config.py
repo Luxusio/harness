@@ -1,14 +1,53 @@
-"""Immutable project selections; no credential discovery outside the caller."""
+"""Immutable selections and authentication from the consuming project."""
 from __future__ import annotations
 
 import copy
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 
 from .models import Credentials, RemoteError, compact_json, digest, native_id
+
+
+AUTH_FIELDS = ('ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN')
+
+
+def project_credentials(root, environment):
+    """Resolve one complete tuple from the exact project file or caller."""
+    from wiki_platform import native_executable, private_source, run_bounded, same_file
+    path = root / 'mise.local.toml'
+    if not os.path.lexists(path):
+        return [environment.get(name) for name in AUTH_FIELDS]
+    child_env = {key: value for key, value in environment.items()
+                 if not key.upper().startswith(('ATLASSIAN_', 'MISE_', '__MISE_'))}
+    child_env.update(MISE_YES='0', MISE_AUTO_INSTALL='0')
+    try:
+        with private_source(path, 65536):
+            mise = (native_executable('mise', cwd=root, env=child_env) if os.name == 'nt'
+                    else shutil.which('mise', path=child_env.get('PATH')))
+            if mise is None:
+                raise ValueError('mise is unavailable')
+            result = run_bounded([mise, 'env', '--json-extended'], cwd=root, env=child_env,
+                                 timeout=10, limit=1048576, capture_stderr=os.name == 'nt')
+            if result.returncode:
+                raise ValueError('Project authentication evaluation failed')
+            data = json.loads(result.stdout.decode('utf-8'))
+            values = []
+            for name in AUTH_FIELDS:
+                entry = data[name]
+                value = entry['value']
+                if (not same_file(entry['source'], str(path)) or not isinstance(value, str)
+                        or not value.strip() or any(ord(c) < 32 for c in value)):
+                    raise ValueError('Project authentication source is unavailable')
+                values.append(value)
+        return values
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        raise ValueError('Project authentication unavailable; configure and trust the project mise.local.toml') from None
 
 
 def home_directory(environment=None):
@@ -121,16 +160,17 @@ class Project:
 
     @classmethod
     def from_project(cls, startup, environment=None):
-        from document_destination import _read_config, _origin, _validate_config
+        from document_destination import _project_root, _read_config, _origin, _validate_config
         environment = dict(os.environ if environment is None else environment)
         try:
-            value = _read_config(str(startup))
+            root = _project_root(startup)
+            value = _read_config(str(root))
             if value is None:
                 return None
             _validate_config(value)
             if value.get('enabled') is False:
                 return None
-            values = [environment.get(name) for name in ('ATLASSIAN_BASE_URL', 'ATLASSIAN_EMAIL', 'ATLASSIAN_API_TOKEN')]
+            values = project_credentials(root, environment)
             if any(not isinstance(v, str) or not v.strip() for v in values):
                 raise ValueError('Private authentication unavailable')
             credentials = Credentials(_origin(values[0]), values[1], values[2])

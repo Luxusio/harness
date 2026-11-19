@@ -100,6 +100,31 @@ def safe_read(path, limit, private=False):
 
 
 @contextmanager
+def private_source(path, limit):
+    """Retain an owner-private input within an ordinary project checkout."""
+    if type(limit) is not int or limit < 0:
+        raise ValueError("Nonnegative byte limit required")
+    if os.name == "nt":
+        with _native.private_source(path, limit) as data:
+            yield data
+        return
+    with _parent(path) as (directory, name):
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            _regular(before, private=True)
+            data = stream.read(limit + 1)
+            if before.st_size > limit or len(data) > limit:
+                raise ValueError("Private source exceeds byte limit")
+            yield data
+            with _parent(path) as (current_directory, current_name):
+                current = os.stat(current_name, dir_fd=current_directory, follow_symlinks=False)
+                if (_metadata_identity(before) != _metadata_identity(os.fstat(stream.fileno()))
+                        or _metadata_identity(before) != _metadata_identity(current)):
+                    raise ValueError("Private source changed during evaluation")
+
+
+@contextmanager
 def trusted_metadata_directory(path):
     """Hold the trusted notice directory while its transaction is consumed."""
     path = _absolute(path)

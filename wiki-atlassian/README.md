@@ -50,9 +50,21 @@ activation. Keep the pin associated with the credential's actual issuer; do not
 silently repin existing tokens when committed YAML changes. YAML rejects
 credentials and unknown fields. Secrets never belong in the shared file.
 
-Start the host from the consuming project, for example `mise exec -- codex` or
-`mise exec -- claude`. The plugin does not read TOML or invoke mise: it receives
-injected authentication. From subdirectories it finds the nearest Git boundary,
+At MCP startup, the plugin loads all three credential fields from that project's
+`mise.local.toml` using `mise env --json-extended`. This also supports a Desktop
+host started outside a terminal. The file must already be trusted by mise and
+owner-private. The plugin retains its file identity during evaluation, checks
+each field's source, and validates the private origin against the shared site.
+Evaluation is bounded to ten seconds within the twenty-second MCP startup
+allowance. Runtime does not grant trust or install missing tools.
+
+An existing project file is authoritative. Invalid or incomplete local
+authentication leaves the connection unavailable. If the file is absent, a
+complete injected tuple remains supported for CLI, CCC and other callers.
+Project authentication is evaluated once per MCP process and does not change
+the caller environment or use the private feedback account.
+
+From subdirectories the plugin finds the nearest Git boundary,
 including linked worktrees, and reads only that root's common manifest. Nested repositories
 do not inherit an outer repository's connection. Outside Git, only the startup
 directory's `doc/harness/manifest.yaml` is used. No home, plugin-directory, JSON, old connection env or
