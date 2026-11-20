@@ -463,7 +463,8 @@ def test_normal_exit_still_cleans_owned_descendants(tmp_path, inherited_stdout):
     while time.monotonic() < deadline:
         try:
             status = Path(f"/proc/{pid}/stat").read_text().split()[2]
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # The kernel can reap the process between opening and reading stat.
             return
         if status == "Z":
             return
