@@ -19,6 +19,9 @@ def installer(tmp_path, monkeypatch):
     payload = tmp_path / 'versions/0.2.0+h0123456789abcdef'
     module.ensure_private_directory(payload / 'plugin')
     module.atomic_write(payload / 'plugin/.mcp.json', b'{"command":"python"}')
+    module.ensure_private_directory(payload / 'plugin/agents')
+    definition = module.ROOT / 'agents/antigravity-reviewer.json'
+    module.atomic_write(payload / 'plugin/agents/antigravity-reviewer.json', definition.read_bytes())
     home = tmp_path / 'host'
     module.ensure_private_directory(home)
     monkeypatch.setenv('CODEX_HOME', str(home))
@@ -47,7 +50,7 @@ def test_registered_reviewers_allow_only_document_reads(installer, tmp_path):
     body = artifact.read_text(encoding='utf-8')
     agent = yaml.safe_load(body.split('---', 2)[1])
     assert agent['inheritMcp'] is False and agent['inheritCustomizations'] is False
-    assert set(agent['tools']) == {'view_file', 'grep_search', 'call_mcp_tool', 'send_message'}
+    assert set(agent['tools']) == {'view_file', 'grep_search'}
     remote, = agent['mcpServers']
     assert set(remote['enabledTools']) == expected
     assert remote['command'] == sys.executable and remote['cwd'] == str(project)
@@ -111,6 +114,14 @@ def test_companion_reviewer_is_project_bound_and_preserves_local_edits(installer
     server, = config['mcpServers']
     with review_workspace_identity(project) as identity:
         assert server['args'][1:] == ['--reviewer', '--project-root', str(project), '--reviewer-project-id', identity]
+        legacy = payload.parent / '0.2.0+h5555555555555555'
+        shutil.copytree(payload, legacy)
+        (legacy / 'plugin/agents/antigravity-reviewer.json').unlink()
+        old = module.antigravity_reviewer(legacy, project, project_id=identity, allow_legacy=True)
+        assert b'call_mcp_tool' in old and 'call_mcp_tool' not in body
+        target.write_bytes(old)
+        module.register_antigravity_reviewer(payload, project, companion_root=companions)
+        assert target.read_text(encoding='utf-8') == body
     monkeypatch.setattr(runtime, '_serve', lambda args: 73)
     assert runtime.main(server['args'][1:]) == 73
     project.rename(tmp_path / 'original-checkout')

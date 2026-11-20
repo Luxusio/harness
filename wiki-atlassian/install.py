@@ -373,7 +373,29 @@ def _failure_reason(exc, generic):
     return generic
 
 
-def antigravity_reviewer(payload, project, *, project_id=None):
+def _antigravity_fields(plugin, project_id, *, allow_legacy):
+    try:
+        definition = json.loads(safe_metadata_read(plugin / 'agents/antigravity-reviewer.json', 65536))
+    except FileNotFoundError:
+        if not allow_legacy:
+            raise ValueError('Antigravity reviewer declaration missing from the prepared payload') from None
+        # Prior immutable payloads predate the host declaration. Reproduce
+        # their exact bytes only when checking an existing managed definition.
+        fields = {'name': 'document-reviewer', 'description': 'Independently review stored project wiki revisions and repository sources.',
+                  'subagent': True, 'mainAgent': False, 'inheritMcp': False, 'inheritCustomizations': False,
+                  'tools': ['view_file', 'grep_search', 'call_mcp_tool', 'send_message']}
+        if project_id is not None:
+            fields['name'] = 'wiki-atlassian-document-reviewer'
+            fields['description'] = (
+                'Use for independent verification of project requirements, proposals and attributed human decisions '
+                'against stored Confluence sources, revisions and evidence. '
+                '요구사항·기획안·사람의 결정을 원문과 대조하거나 문서 이관을 검수할 때 위임합니다. '
+                '일상적인 문서 검색·단순 조회는 주 에이전트가 처리합니다.')
+        return fields
+    return {**definition['companion' if project_id is not None else 'workspace'], **definition['capabilities']}
+
+
+def antigravity_reviewer(payload, project, *, project_id=None, allow_legacy=False):
     """Render Antigravity's agent-local MCP with the same project and owned entry as the writer."""
     from wiki_atlassian.tools import REVIEW_TOOLS
 
@@ -388,16 +410,8 @@ def antigravity_reviewer(payload, project, *, project_id=None):
     if project_id is not None:
         connection['args'].extend(['--reviewer-project-id', project_id])
     # Each value is JSON, which is also a YAML flow value. Paths and argv remain literal.
-    fields = {'name': 'document-reviewer', 'description': 'Independently review stored project wiki revisions and repository sources.',
-              'subagent': True, 'mainAgent': False, 'inheritMcp': False, 'inheritCustomizations': False,
-              'tools': ['view_file', 'grep_search', 'call_mcp_tool', 'send_message'], 'mcpServers': [connection]}
-    if project_id is not None:
-        fields['name'] = 'wiki-atlassian-document-reviewer'
-        fields['description'] = (
-            'Use for independent verification of project requirements, proposals and attributed human decisions '
-            'against stored Confluence sources, revisions and evidence. '
-            '요구사항·기획안·사람의 결정을 원문과 대조하거나 문서 이관을 검수할 때 위임합니다. '
-            '일상적인 문서 검색·단순 조회는 주 에이전트가 처리합니다.')
+    fields = _antigravity_fields(plugin, project_id, allow_legacy=allow_legacy)
+    fields['mcpServers'] = [connection]
     header = '\n'.join(f'{key}: {json.dumps(value)}' for key, value in fields.items())
     return (f'---\n{header}\n---\n<!-- wiki-atlassian reviewer {payload.name} -->\n' + body.lstrip()).encode('utf-8')
 
@@ -431,7 +445,8 @@ def _register_reviewer(payload, project, workspace, *, project_id=None):
             if old == current:
                 return target
             marker = re.search(rb'^<!-- wiki-atlassian reviewer (0\.2\.0\+h[0-9a-f]{16}) -->$', old, re.M)
-            if not marker or antigravity_reviewer(payload.parent / marker[1].decode('ascii'), project, project_id=project_id) != old:
+            if not marker or antigravity_reviewer(payload.parent / marker[1].decode('ascii'), project,
+                                                 project_id=project_id, allow_legacy=True) != old:
                 raise ValueError('Existing Antigravity reviewer differs; preserve the local definition')
         if os.name == 'nt':
             from wiki_platform import metadata_write
