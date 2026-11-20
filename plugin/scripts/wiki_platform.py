@@ -493,15 +493,17 @@ def same_file(left, right):
 
 
 def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, capture_stderr=False,
-                input_bytes=None):
+                input_bytes=None, cancelled=None):
     """Run a private helper with bounded bytes and complete owned-tree cleanup."""
     if timeout <= 0 or type(limit) is not int or limit < 0:
         raise ValueError("Positive timeout and nonnegative byte limit required")
+    if cancelled is not None and cancelled():
+        raise subprocess.SubprocessError("Private helper cancelled")
     if type(capture_stderr) is not bool:
         raise ValueError("Separate stderr capture must be a boolean")
     if os.name == "nt":
         return _native.run_bounded(argv, cwd=cwd, env=env, timeout=timeout, limit=limit,
-                                   capture_stderr=capture_stderr, input_bytes=input_bytes)
+                                   capture_stderr=capture_stderr, input_bytes=input_bytes, cancelled=cancelled)
     if capture_stderr:
         raise NotImplementedError("Private-helper stderr capture requires Windows")
     if input_bytes is not None and not isinstance(input_bytes, bytes):
@@ -524,6 +526,8 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
                 else:
                     process.stdin.close()
             while selector.get_map():
+                if cancelled is not None and cancelled():
+                    raise subprocess.SubprocessError("Private helper cancelled")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(argv, timeout)
@@ -551,7 +555,16 @@ def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, graceful=False, ca
                         output.extend(chunk)
                         if len(output) > limit:
                             raise ValueError("Private helper output exceeds byte limit")
-            process.wait(timeout=max(0.001, deadline - time.monotonic()))
+            while process.poll() is None:
+                if cancelled is not None and cancelled():
+                    raise subprocess.SubprocessError("Private helper cancelled")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                try:
+                    process.wait(timeout=min(remaining, 0.05) if cancelled is not None else remaining)
+                except subprocess.TimeoutExpired:
+                    continue
         return subprocess.CompletedProcess(argv, process.returncode, bytes(output), b"")
     finally:
         if graceful:

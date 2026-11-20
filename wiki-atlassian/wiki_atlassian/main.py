@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import json
 import math
 import os
@@ -21,7 +22,7 @@ def terminate(signum, frame):
     raise SystemExit(1)
 
 
-def personal_operation(operation, arguments, timeout=60):
+def personal_operation(operation, arguments, timeout=60, *, cancelled=None):
     """Bound one common operation, including private mise evaluation and HTTPS."""
     from native_cli import owned_python_argv
     from wiki_platform import run_bounded
@@ -39,7 +40,7 @@ def personal_operation(operation, arguments, timeout=60):
         command = owned_python_argv(sys.executable, launcher, ['--personal-operation'],
                                     import_roots=[Path(personal_feedback.__file__).resolve().parent])
         result = run_bounded(command, cwd=Path.cwd(), env=environment, timeout=timeout,
-                             limit=MAX_OUTPUT, graceful=True, input_bytes=request)
+                             limit=MAX_OUTPUT, graceful=True, input_bytes=request, cancelled=cancelled)
         value = json.loads(result.stdout.decode('utf-8'))
         if result.returncode != 0 or not isinstance(value, dict):
             raise ValueError()
@@ -157,7 +158,15 @@ def _serve(args):
     import personal_feedback
     home = home_directory()
     private_path = home / '.config/harness/feedback.yaml'
-    personal = personal_operation if not args.reviewer and os.path.lexists(private_path) else None
+    stopping = False
+
+    def stop_server(signum, frame):
+        nonlocal stopping
+        stopping = True
+        terminate(signum, frame)
+
+    personal = (partial(personal_operation, cancelled=lambda: stopping)
+                if not args.reviewer and os.path.lexists(private_path) else None)
     documents = None
     unavailable = False
     try:
@@ -167,7 +176,7 @@ def _serve(args):
             sys.stderr.write('Atlassian project connection or authentication unavailable\n')
             return 1
         project, unavailable = None, True
-    previous_handler = signal.signal(signal.SIGTERM, terminate)
+    previous_handler = signal.signal(signal.SIGTERM, stop_server)
     try:
         if args.codex_review_binding is not None:
             from .codex_registration import registered_digest

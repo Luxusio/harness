@@ -1295,10 +1295,11 @@ def _process(argv, *, cwd, env, timeout, limit, merge_stderr=False, cancelled=No
                     _DeleteAttributes(attribute_list)
 
 
-def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, capture_stderr=False, input_bytes=None):
+def run_bounded(argv, *, cwd, env, timeout=20, limit=1048576, capture_stderr=False, input_bytes=None,
+                cancelled=None):
     """Capture optional stderr with the private helper's exception protocol."""
     result = _process(argv, cwd=cwd, env=env, timeout=timeout, limit=limit,
-                      capture_stderr=capture_stderr, input_bytes=input_bytes)
+                      capture_stderr=capture_stderr, input_bytes=input_bytes, cancelled=cancelled)
     if result["error"] == "timeout":
         raise subprocess.TimeoutExpired(argv, timeout)
     if result["error"] == "output limit exceeded":

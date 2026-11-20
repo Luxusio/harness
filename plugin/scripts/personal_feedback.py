@@ -130,9 +130,14 @@ def _credentials(directory, environment, deadline=None):
     mise = shutil.which("mise")
     if not mise:
         raise FeedbackError("mise is required for private feedback authentication.")
-    # Never let the consuming project's activated mise environment choose credentials.
+    # CI provider flags can make mise trust every config. Pass only the OS
+    # locations required to discover the private user's existing trust record.
+    allowed = {"HOME", "USERPROFILE", "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR",
+               "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR", "USER", "LOGNAME",
+               "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+               "XDG_STATE_HOME"}
     child_env = {k: v for k, v in environment.items()
-                 if not k.upper().startswith(("ATLASSIAN_", "MISE_", "__MISE_"))}
+                 if k.upper() in allowed}
     child_env["MISE_YES"] = "0"
     try:
         timeout = 20 if deadline is None else min(20, deadline-time.monotonic()-1)

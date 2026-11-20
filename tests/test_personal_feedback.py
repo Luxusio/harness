@@ -273,7 +273,8 @@ def test_real_mise_private_account_is_independent_of_project_environment(tmp_pat
                        XDG_CACHE_HOME=str(home / ".cache"), XDG_STATE_HOME=str(home / ".local/state"),
                        APPDATA=str(home / "AppData/Roaming"), LOCALAPPDATA=str(home / "AppData/Local"),
                        ATLASSIAN_BASE_URL="https://project.invalid",
-                       ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token")
+                       ATLASSIAN_EMAIL="project@example.invalid", ATLASSIAN_API_TOKEN="project-token",
+                       CI="true", GITHUB_ACTIONS="true")
     monkeypatch.setattr(feedback, "_request", forbidden)
     assert feedback.perform("check", home=home, environment=environment)["status"] == "unavailable"
     subprocess.run([mise, "trust", str(auth)], cwd=folder, env=environment,
