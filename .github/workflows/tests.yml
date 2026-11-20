@@ -17,16 +17,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Install repository toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
 
       - name: Install test dependencies
         run: |
-          python -m pip install --upgrade pip
-          # pyproject.toml [dependency-groups] dev: pytest, pytest-xdist, pyyaml (pip >= 25.1)
-          python -m pip install --group dev
+          mise exec -- python -m pip install --upgrade pip
+          mise exec -- python -m pip install --group dev
 
       - name: Run full test suite
         env:
