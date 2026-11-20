@@ -38,7 +38,7 @@ Further references:
 - `.codex-plugin/plugin.json` — Codex plugin manifest (mirror of Claude's `.claude-plugin/plugin.json`).
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
 - `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
-- `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair, `run` for repository mutation, and `report-friction` for a read-only, copyable Harness incident handoff. `run` is implicitly invocable and loads the canonical internal workflow before edits.
+- `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair, `run` for repository mutation, and `report-friction` for a copyable Harness incident handoff and authorized proactive inbox reporting. `run` is implicitly invocable and loads the canonical internal workflow before edits.
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` for required independent review and QA. If that capability is absent, a strict review gate remains pending; inline work is limited to explicitly advisory roles.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`.

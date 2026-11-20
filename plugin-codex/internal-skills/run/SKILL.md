@@ -14,6 +14,12 @@ Harness manifest guard. Run only in a project initialized by `harness:setup`
 Outside an initialized project, continue ordinary work without Harness WBS roots,
 planning, routing reminders or automatic setup. Explicit setup remains available.
 
+When Harness causes a material blockage or repeated avoidable work, or evidence
+shows an actionable improvement, use `report-friction` during the run. Ask
+workers, reviewers and QA to relay observations alongside their normal result.
+Only the coordinator checks authorization and sends once. Continue the original
+work while reporting, including when close is unreachable.
+
 ## Substantive review and QA
 
 For development, apply the following review/QA gate. Other purposes await
