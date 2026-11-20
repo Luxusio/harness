@@ -70,10 +70,13 @@ Use backend-specific comments/history when necessary. A resolved comment is not
 proof that its suggestion was accepted. Remote read permission alone does not
 authorize copying restricted material into a broader audience.
 
-The agent that learned the facts writes the knowledge. For substantive knowledge
-consolidation, correction or migration, use the independent document reviewer at
-`../../agents/document-reviewer.md`; a short source append does not require a
-new development workflow. No WBS/Jira issue is required for ordinary wiki work.
+The agent that learned the facts writes the knowledge. After a project wiki authoring
+task, including a short source append, route the saved revisions and their
+sources to the independent [document reviewer](../../agents/document-reviewer.md)
+as part of the task. Batch related edits into one review. Apply the standing
+review checks without waiting for a separate audit request. Review the affected
+passages, their entry points and dependent summaries. An ordinary read-only
+lookup needs no reviewer. No WBS/Jira issue is required for ordinary wiki work.
 Claude Code discovers the bundled `wiki-atlassian:document-reviewer` agent.
 Antigravity discovers the workspace role created by
 `python wiki-atlassian/install.py --antigravity-reviewer PROJECT`. Reload the
@@ -180,8 +183,6 @@ Use 근거, 의존, 반박, 대체, or 관련 with a colon, one native page link
 and a dash followed by the reason. For example, render
 `의존: [정기이관 기준] — 적용 날짜의 근거` with the bracketed text as a
 single actual link to the native page. Keep live relations in ordinary visible document content.
-For substantive changes have the independent document reviewer compare the
-recorded sources, derived claims and affected pages.
 
 ## Act on change context
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, time
 from html import escape
 from html.entities import html5
 import re
@@ -83,7 +84,23 @@ class Element:
                 yield node
                 stack.extend(reversed(node.children))
 
-    def text(self):
+    def unlabelled_time(self):
+        """Native date chips commonly carry their entire label in datetime."""
+        value = self.attrs.get('datetime', '')
+        if any(isinstance(child, Element) or child.text().strip() for child in self.children):
+            return ''
+        if not re.fullmatch(r'[0-9TWZ:+., -]{2,64}', value):
+            return ''
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            try:
+                time.fromisoformat(value)
+            except ValueError:
+                return ''
+        return value
+
+    def text(self, *, project_dates=False):
         result = []
         stack = list(reversed(self.children))
         while stack:
@@ -92,6 +109,8 @@ class Element:
                 result.append(node.text())
             elif node.tag == 'br':
                 result.append('\n')
+            elif project_dates and node.tag == 'time' and (value := node.unlabelled_time()):
+                result.append(value)
             else:
                 stack.extend(reversed(node.children))
         return ''.join(result)
@@ -212,7 +231,7 @@ def _headings(root):
 
 
 def native_headings(body):
-    return [dict(key=key, level=int(e.tag[1]), text=re.sub(r'\s+', ' ', e.text()).strip(),
+    return [dict(key=key, level=int(e.tag[1]), text=re.sub(r'\s+', ' ', e.text(project_dates=True)).strip(),
                  start=e.start, end=e.end, body_start=e.end)
             for key, e in _headings(parse_storage(body, 'section_context_required'))]
 
@@ -335,7 +354,7 @@ def _heading_patch(body, root, edit, format):
         _error('invalid_edit', 'Specify one section position or unique heading title and content')
     headings = _headings(root)
     matches = [(key, node) for key, node in headings if
-               (key if locator == 'section' else ' '.join(node.text().split())) == edit[locator]]
+               (key if locator == 'section' else ' '.join(node.text(project_dates=True).split())) == edit[locator]]
     if len(matches) != 1:
         _error('section_not_found' if not matches else 'patch_ambiguous',
                'Use the unique heading title or versioned outline position', matchCount=len(matches))

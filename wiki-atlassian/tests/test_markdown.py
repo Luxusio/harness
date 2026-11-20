@@ -12,6 +12,16 @@ from wiki_atlassian.storage import native_headings
 @pytest.mark.parametrize('source,expected', [
     ('<p>  Same  text&nbsp; </p>', '  Same  text\u00a0 '),
     ('<p>A<br/>B</p>', 'A\nB'), ('<div><p>A</p><p>B</p></div>', 'A\n\nB'),
+    ('<p>Checked <time datetime="2026-11-19" />.</p>', 'Checked 2026-11-19.'),
+    ('<time datetime="2026-11-19T12:30:00+09:00"> </time>', '2026-11-19T12:30:00+09:00'),
+    ('<p><time datetime="12:30">12:30</time></p>', '12:30'),
+    ('<time datetime="2026-11-19"><strong>Thursday</strong></time>', '**Thursday**'),
+    ('<time datetime="2026-11-19"><img src="calendar.png" alt="Calendar"/></time>', '![Calendar](calendar.png)'),
+    ('<time datetime="2026-11-19"><ac:link><ri:page ri:content-id="23"/></ac:link></time>',
+     '[Confluence page 23](/wiki/pages/viewpage.action?pageId=23)'),
+    ('<time datetime="2026-11-19"><ac:image><ri:attachment ri:filename="calendar.png"/></ac:image></time>',
+     '![calendar.png](calendar.png)'),
+    ('<time datetime="2026-02-31"/>', ''), ('<time/>', ''),
     ('<h2>Heading 😀</h2><p>Human <strong>bold</strong> <em>italic</em></p>', '## Heading 😀\n\nHuman **bold** *italic*'),
     ('<ul><li>First</li><li>Second</li></ul>', '- First\n- Second'),
     ('<ol><li>First</li><li>Second</li></ol>', '1. First\n2. Second'),
@@ -46,6 +56,14 @@ def test_authored_heading_context_never_comes_from_markdown_paragraph_syntax():
     body = '<p>## Generated-looking paragraph</p><h2>Native</h2><p>Text</p>'
     assert to_markdown(body).startswith('## Generated-looking paragraph')
     assert [h['text'] for h in native_headings(body)] == ['Native']
+
+
+def test_native_date_heading_and_link_label_agree_with_markdown():
+    chip = '<time datetime="2026-11-19" />'
+    heading = '<h2>Verification ' + chip + '</h2>'
+    link = '<ac:link ac:anchor="log"><ac:link-body>' + chip + '</ac:link-body></ac:link>'
+    assert native_headings(heading)[0]['text'] == 'Verification 2026-11-19'
+    assert to_markdown(heading + '<p>' + link + '</p>') == '## Verification 2026-11-19\n\n[2026-11-19](#log)'
 
 
 @pytest.mark.parametrize('encoded,visible', [('&#9;', '\t'), ('&#10;', '\n'), ('&#13;', '\r'), ('&NewLine;', '\n'), ('&Tab;', '\t')])

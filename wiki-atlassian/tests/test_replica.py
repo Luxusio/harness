@@ -331,6 +331,44 @@ class ReplicaTests(unittest.TestCase):
         self.assertEqual(1, self.replica.get_document({'document': '211'})['version'])
         self.assertFalse(list(self.replica.control.glob('stage-*')))
 
+    def test_legacy_markdown_is_rebuilt_and_searchable_at_same_native_version(self):
+        self.change('211', body='<p>Verified <time datetime="2026-11-19" />.</p>')
+        self.replica.synchronize()
+        manifest = self.metadata('manifest.json')
+        row = manifest['pages']['211']
+        projection = self.replica._path(row['path'])
+        original = projection.read_bytes()
+        self.assertIn(b'Verified 2026-11-19.', original)
+        atomic_write(projection, original.replace(b'Verified 2026-11-19.', b'Verified .'))
+        # Both full legacy sweeps and single-page legacy writes omit the
+        # producer revision on the projections they replace.
+        del row['markdownProjectionVersion']
+        self.write_metadata('manifest.json', manifest)
+        self.assertEqual(0, self.replica.refresh_delay())
+        self.assertFalse(self.replica.status()['ready'])
+        self.assertEqual('replica_incomplete', self.replica.get_document({'document': '211'})['code'])
+        self.replica.synchronize()
+        hit = self.replica.search({'query': '2026-11-19'})['results'][0]
+        self.assertEqual(('211', row['version']), (hit['id'], hit['version']))
+        self.assertEqual(original, projection.read_bytes())
+        self.assertEqual(row['bodyHash'], self.metadata('manifest.json')['pages']['211']['bodyHash'])
+
+    def test_native_date_reads_preserve_storage_and_agree_with_replica(self):
+        from unittest.mock import patch
+        from wiki_atlassian.service import WikiService
+        chip = '<time datetime="2026-11-19" />'
+        body = '<h2>Log ' + chip + '</h2><p>Checked ' + chip + '.</p>'
+        self.change('211', body=body)
+        self.replica.synchronize()
+        service = WikiService(self.settings, self.remote, self.replica)
+        params = {'document': '211', 'version': 1, 'metadata': True}
+        with patch.object(self.remote, 'version', create=True, return_value={'message': ''}):
+            self.assertEqual(body, service.execute('get_document', dict(params, format='storage'))['content'])
+            self.assertEqual('1 Log 2026-11-19', service.execute('get_document', dict(params, format='outline'))['content'])
+            section = service.execute('get_document', dict(params, section='1'))['content']
+            self.assertIn('Checked 2026-11-19.', section)
+        self.assertIn(section, self.replica.get_document({'document': '211'})['content'])
+
     def test_previous_generation_is_readable_while_provider_is_waiting(self):
         self.replica.synchronize()
         self.expire()

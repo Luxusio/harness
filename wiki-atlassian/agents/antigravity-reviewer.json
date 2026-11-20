@@ -1,11 +1,11 @@
 {
   "workspace": {
     "name": "document-reviewer",
-    "description": "Independently review stored project wiki revisions and repository sources."
+    "description": "Review saved project wiki revisions after authoring, including their authoritative sources, revisions and evidence."
   },
   "companion": {
     "name": "wiki-atlassian-document-reviewer",
-    "description": "Use for independent verification of project requirements, proposals and attributed human decisions against stored Confluence sources, revisions and evidence. 요구사항·기획안·사람의 결정을 원문과 대조하거나 문서 이관을 검수할 때 위임합니다. 일상적인 문서 검색·단순 조회는 주 에이전트가 처리합니다."
+    "description": "Use after project wiki authoring and for independent verification of requirements, proposals and attributed decisions against stored revisions. SD 문서를 작성·수정하면 별도 요청 없이 저장된 판본과 근거를 검수합니다. 단순 조회는 주 에이전트가 처리합니다."
   },
   "capabilities": {
     "subagent": true,

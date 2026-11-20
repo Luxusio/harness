@@ -33,6 +33,7 @@ BODY_LIMIT = 8 * 1024 * 1024
 MANIFEST_LIMIT = 16 * 1024 * 1024
 PAGE_LIMIT = 20_000
 READ_ADMISSION_SECONDS = 2.0
+MARKDOWN_PROJECTION_VERSION = 2
 _DEVICE = r'(?i)(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?'
 
 
@@ -418,6 +419,14 @@ class Replica:
                     raise RemoteError('root_scope_denied', 'Confirmed scope denial blocks this snapshot until fresh synchronization')
                 if manifest.get('inventoryComplete') is not True:
                     raise RemoteError('replica_incomplete', 'Wait for a complete inventory synchronization')
+                # Older clients can replace individual pages while retaining unknown
+                # manifest fields. Require the producing revision on each admitted row.
+                unavailable = set(manifest.get('unavailable', []))
+                if manifest.get('titleProjectionVersion') != 1 or any(
+                    row.get('markdownProjectionVersion') != MARKDOWN_PROJECTION_VERSION
+                    for id, row in manifest['pages'].items() if id not in unavailable
+                ):
+                    raise RemoteError('replica_incomplete', 'Wait for synchronization to rebuild the Markdown projections')
                 yield manifest
                 if self.settings.identity() != identity:
                     raise RemoteError('replica_unavailable', 'Connection changed during read')
@@ -441,8 +450,6 @@ class Replica:
                 return 0
         try:
             with self._locked_manifest() as manifest:
-                if manifest.get('titleProjectionVersion') != 1:
-                    return 0
                 state = self._checkpoint()
                 if (state.get('cursor') != manifest['cursor']
                     or state.get('credentialBinding') != self.settings.credential_fingerprint):
@@ -1303,7 +1310,8 @@ class Replica:
         if len(markdown.encode('utf-8')) > BODY_LIMIT:
             raise RemoteError('replica_body_limit', 'Markdown projection exceeds its byte budget')
         self._write(self._path(path, stage), markdown)
-        row = dict(_row(node, path, storage, hash), relations=knowledge_relations(page.body, self.settings.site, self.settings.space))
+        row = dict(_row(node, path, storage, hash), markdownProjectionVersion=MARKDOWN_PROJECTION_VERSION,
+                   relations=knowledge_relations(page.body, self.settings.site, self.settings.space))
         if referenced:
             row['linkedTitles'] = sorted(referenced)
         return row

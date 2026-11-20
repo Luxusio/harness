@@ -98,8 +98,11 @@ def to_markdown(storage, current_page_url=None, image_path_mapping=None, *, reso
         page_id = page.attrs.get('ri:content-id', '') if page else ''
         title = page.attrs.get('ri:content-title', '') if page else ''
         space = page.attrs.get('ri:space-key', '') if page else ''
-        label = next((re.sub(r'\s+', ' ', e.text()).strip() for name in ('ac:link-body', 'ac:plain-text-link-body') if (e := _first(element, name)) is not None and e.text()), None)
-        label = label or title or anchor or (element.text() if page is None else f'Confluence page {page_id}')
+        label = next((re.sub(r'\s+', ' ', text).strip()
+                      for name in ('ac:link-body', 'ac:plain-text-link-body')
+                      if (e := _first(element, name)) is not None
+                      and (text := e.text(project_dates=True))), None)
+        label = label or title or anchor or (element.text(project_dates=True) if page is None else f'Confluence page {page_id}')
         image_body = _first(element, 'ac:link-body')
         image_body = image_body if image_body is not None and any(e.tag in ('ac:image', 'img') or e.tag == 'ac:structured-macro' and e.attrs.get('ac:name') == 's3-static-macro-image' for e in image_body.descendants()) else None
         rendered = convert(image_body).strip() if image_body is not None else _label(label)
@@ -149,6 +152,8 @@ def to_markdown(storage, current_page_url=None, image_path_mapping=None, *, reso
             return convert(element)
         if name == 'ac:parameter':
             return ''
+        if name == 'time' and (date := element.unlabelled_time()):
+            return date
         value = convert(element)
         if re.fullmatch(r'h[1-6]', name):
             return '\n' + '#' * int(name[1]) + ' ' + value + '\n'
