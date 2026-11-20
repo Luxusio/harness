@@ -199,6 +199,10 @@ def test_basedon_and_link_targets_require_current_selected_scope(service):
     remote.body = '<p><a href="https://old.invalid">Keep label</a></p>'
     result = api.execute('update_document', {'document': '2', 'version': 1, 'links': {'https://old.invalid': '99'}})
     assert result['status'] == 'error' and not remote.writes
+    source = f'{api.settings.site}/wiki/spaces/{api.settings.space}/pages/3'
+    result = api.execute('update_document', {'document': '2', 'version': 1, 'append': '<p>Derived</p>',
+                                            'basedOn': [{'document': source, 'version': 1}]})
+    assert result['basedOn'] == [{'id': '3', 'version': 1}]
 
 
 def test_moves_must_keep_all_existing_ancestors(service):

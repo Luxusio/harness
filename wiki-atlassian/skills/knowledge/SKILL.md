@@ -73,10 +73,15 @@ authorize copying restricted material into a broader audience.
 The agent that learned the facts writes the knowledge. After a project wiki authoring
 task, including a short source append, route the saved revisions and their
 sources to the independent [document reviewer](../../agents/document-reviewer.md)
-as part of the task. Batch related edits into one review. Apply the standing
+as part of the task. Group related edits before saving a page. Apply the standing
 review checks without waiting for a separate audit request. Review the affected
 passages, their entry points and dependent summaries. An ordinary read-only
 lookup needs no reviewer. No WBS/Jira issue is required for ordinary wiki work.
+In a registered Codex project the verified save includes `documentReview`.
+Each saved revision gets its own review. Follow each returned operation ID
+through `operation_status` in the same project connection.
+Report the saved revision and the review outcome separately. If the operation
+reports a blocker, preserve the saved page and report the pending review.
 Claude Code discovers the bundled `wiki-atlassian:document-reviewer` agent.
 Antigravity discovers the workspace role created by
 `python wiki-atlassian/install.py --antigravity-reviewer PROJECT`. Reload the

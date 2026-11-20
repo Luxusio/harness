@@ -72,8 +72,9 @@ WIKI_TOOLS = [
         'allowReferenceRemoval': field(B, default=False),
         'basedOn': field(A), 'links': field(O),
         'defer': field(B, 'Queue an explicit document and version and return a session-local operation ID'), **SPACE}),
-    tool('operation_status', 'Check a deferred update in the same MCP session and connection. Queued and running are not stored outcomes.', {
-        'operationId': field(S, 'Operation ID returned by update_document')}, ['operationId']),
+    tool('operation_status', 'Check a deferred update or its independent document review in the same MCP session and connection. A review finishes separately from the save.', {
+        'operationId': field(S, 'ID of the deferred update or documentReview'),
+        'waitSeconds': bounded_integer(0, 20, 'Wait up to this many seconds for a pending document review', 0)}, ['operationId']),
     tool('list_comments', 'Read native footer/inline comments and bounded replies; returned references preserve thread identity.', {
         'target': field(S), 'limit': field(I, default=20), 'cursor': field(S), 'format': field(S), **META,
         'includeReplies': field(B, default=False), 'repliesPerComment': field(I, default=3), **SPACE}, ['target']),
@@ -93,6 +94,8 @@ def validate_arguments(name, arguments):
         raise RemoteError('unknown_tool', 'Unknown tool')
     schema = SCHEMAS[name]['inputSchema']
     result = validate_object(schema, arguments)
+    if name == 'operation_status' and not 0 <= result['waitSeconds'] <= 20:
+        raise RemoteError('invalid_request', 'waitSeconds must be between 0 and 20')
     if 'reads' in arguments or 'queries' in arguments:
         if arguments.get('connection') == 'personal':
             raise RemoteError('invalid_request', 'Batch retrieval uses one configured project space')

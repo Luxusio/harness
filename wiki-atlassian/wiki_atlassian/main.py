@@ -117,10 +117,14 @@ def main(argv=None):
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--personal-operation', action='store_true', help=argparse.SUPPRESS)
     modes.add_argument('--reviewer', action='store_true', help='Serve the four project-only document review operations')
+    modes.add_argument('--codex-host', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--reviewer-project-id', help=argparse.SUPPRESS)
+    parser.add_argument('--codex-review-binding', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if not args.project_root.is_absolute() or not args.project_root.is_dir():
         parser.error('--project-root must be an existing absolute startup directory')
+    if args.codex_review_binding is not None and not args.reviewer_project_id:
+        parser.error('--codex-review-binding requires a bound reviewer project')
     if args.reviewer_project_id is not None:
         if not args.reviewer:
             parser.error('--reviewer-project-id requires --reviewer')
@@ -165,11 +169,20 @@ def _serve(args):
         project, unavailable = None, True
     previous_handler = signal.signal(signal.SIGTERM, terminate)
     try:
+        if args.codex_review_binding is not None:
+            from .codex_registration import registered_digest
+            if registered_digest(args.project_root, args.reviewer_project_id, project) != args.codex_review_binding:
+                sys.stderr.write('The Codex reviewer project registration changed before connection\n')
+                return 1
         if project is not None:
             from .remote import Remote
             from .multispace import MultiSpaceKnowledge
             documents = MultiSpaceKnowledge(project, Remote(project.credentials))
-        Server(documents, personal, unavailable, reviewer=args.reviewer).run()
+        review = None
+        if args.codex_host and project is not None:
+            from .codex_registration import reviewer_for
+            review = reviewer_for(args.project_root, project)
+        Server(documents, personal, unavailable, reviewer=args.reviewer, codex_review=review).run()
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
         if documents is not None:

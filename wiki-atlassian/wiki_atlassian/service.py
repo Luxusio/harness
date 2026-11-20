@@ -392,7 +392,10 @@ class WikiService:
             require(self.remote.require_scope(self.settings, linked_id).type == 'page', 'scope_metadata_changed')
         if destination is not None:
             require(self.remote.move_ancestry(self.settings, saved.node.id) == [saved.node, *destination_ancestry], 'scope_metadata_changed')
-        return self._publish(saved, self._result(saved, 'created' if creating else 'updated', data, account), before)
+        result = self._result(saved, 'created' if creating else 'updated', data, account)
+        if sources:
+            result['basedOn'] = [{'id': source_id, 'version': version} for source_id, version in sources]
+        return self._publish(saved, result, before)
 
     def _resolve_comment(self, value):
         kind, id = comment_ref(value, self.settings.site)

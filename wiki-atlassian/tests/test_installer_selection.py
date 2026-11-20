@@ -6,9 +6,44 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
+
+
+def test_codex_reviewer_registration_is_bound_to_profile_checkout_and_selection(installer, tmp_path, monkeypatch):
+    from wiki_atlassian import codex_registration
+    from wiki_atlassian.models import Credentials
+    from wiki_platform import review_workspace_identity
+
+    module, _, _ = installer
+    root = tmp_path / 'project'
+    module.ensure_private_directory(root)
+    (root / '.git').mkdir()
+    credentials = Credentials('https://example.invalid', 'account@example.invalid', 'private-fixture-value')
+    project = SimpleNamespace(data_home=tmp_path / 'data', credentials=credentials, selections=[{'key': 'TEAM'}])
+    monkeypatch.setattr(codex_registration.Project, 'from_project', lambda _, *, bound_reviewer: project)
+    assert codex_registration.reviewer_for(root, project) is None
+    path = codex_registration.register(root)
+    assert credentials.email not in path.read_text() and credentials.api_token not in path.read_text()
+    with review_workspace_identity(root) as identity:
+        original = codex_registration.registered_digest(root, identity, project)
+        assert original is not None
+        assert codex_registration.registered_digest(root, 'different-checkout', project) is None
+    callback = codex_registration.reviewer_for(root, project)
+    assert callback is not None
+    project.selections = [{'key': 'OTHER'}]
+    assert callback({})['status'] == 'BLOCKED_ENV'
+    project.selections = [{'key': 'TEAM'}]
+    project.credentials = Credentials('https://example.invalid', 'another@example.invalid', 'new-token')
+    assert callback({})['status'] == 'BLOCKED_ENV'
+    with review_workspace_identity(root) as identity:
+        assert codex_registration.registered_digest(root, identity, project) is None
+        codex_registration.register(root)
+        assert codex_registration.registered_digest(root, identity, project) != original
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'another-profile'))
+    assert codex_registration.reviewer_for(root, project) is None
 
 
 @pytest.fixture

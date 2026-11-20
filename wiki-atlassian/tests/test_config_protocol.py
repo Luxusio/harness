@@ -300,6 +300,122 @@ def test_overflowing_numeric_rpc_id_is_refused_before_dispatch_and_stream_surviv
     assert rows[1]['id'] == 2 and rows[1]['result'] == {}
 
 
+def test_codex_review_receipts_isolate_revision_access_and_waiters():
+    requests, replies = Queue(), Queue()
+    started, release = threading.Event(), threading.Event()
+    target = {'id': '42', 'version': 5, 'space': 'SD'}
+    observed = []
+    denied = False
+
+    class Reader:
+        def readline(self, size):
+            return requests.get(timeout=10)
+
+    class Writer:
+        def write(self, raw):
+            replies.put(json.loads(raw))
+        def flush(self):
+            pass
+
+    class Documents:
+        def execute(self, operation, args):
+            if operation == 'get_document':
+                if args.get('metadata'):
+                    assert args == dict(document='42', version=5, space='SD', metadata=True, includeBody=False)
+                    if denied:
+                        return dict(status='error', code='http_403')
+                return dict(status='read', **target)
+            sources = {'basedOn': [{'id': '23', 'version': 2}]} if args.get('basedOn') else {}
+            return dict(status='updated', body='private provider body', **target, **sources)
+
+    def review(selected):
+        observed.append(selected)
+        started.set()
+        assert release.wait(8)
+        return dict(status='FAIL', document='42', version=5, summary='Missing citation',
+                    sessionId='12345678-1234-4321-9876-123456789abc', body='provider transcript')
+
+    server = Server(documents=Documents(), codex_review=review)
+    thread = threading.Thread(target=server.run, args=(Reader(), Writer()))
+    def send(id, name, **args):
+        params = dict(name=name, arguments=args)
+        requests.put(json.dumps(dict(jsonrpc='2.0', id=id, method='tools/call', params=params)).encode()+b'\n')
+    def receive(id):
+        response = replies.get(timeout=5)
+        assert response['id'] == id
+        return json.loads(response['result']['content'][0]['text'])
+
+    thread.start()
+    try:
+        send(1, 'update_document', document='42', version=4, append='private author text')
+        review_id = receive(1)['documentReview']['operationId']
+        assert started.wait(3) and observed == [target]
+        send(2, 'operation_status', operationId=review_id, connection='personal', waitSeconds=20)
+        assert receive(2)['code'] == 'operation_unavailable'
+        # This long poll must not stall the regular read, deferred write or its own receipt.
+        send(3, 'operation_status', operationId=review_id, waitSeconds=20)
+        send(4, 'get_document', document='42')
+        assert receive(4)['id'] == '42'
+        send(5, 'update_document', document='42', version=4,
+             edits=[{'op': 'replace_section', 'section': '2.1', 'content': 'private author text'}],
+             basedOn=[{'document': 'https://example.invalid/wiki/spaces/SD/pages/23', 'version': 2}], defer=True)
+        write_id = receive(5)['operationId']
+        release.set()
+        finished = receive(3)
+        assert finished['status'] == 'finished' and finished['outcome']['status'] == 'FAIL'
+        assert finished['outcome']['summary'] == 'Missing citation' and 'transcript' not in str(finished)
+    finally:
+        release.set()
+        requests.put(b'')
+        thread.join(10)
+    assert not thread.is_alive()
+    deferred = server._operation_status(write_id, 'project')['outcome']
+    assert deferred['documentReview']['operationId'] != review_id and 'body' not in deferred
+    assert observed == [target, dict(target, sections=['2.1'], sources=[{'id': '23', 'version': 2}])]
+    denied = True
+    fenced = server._operation_status(review_id, 'project')
+    assert fenced['outcome'] == dict(status='BLOCKED_ENV', code='review_access_unconfirmed')
+    assert 'citation' not in str(fenced) and 'sessionId' not in str(fenced)
+
+
+def test_review_queue_retains_active_entries_and_fails_closed(monkeypatch):
+    import wiki_atlassian.protocol as protocol
+    monkeypatch.setattr(protocol, 'RECEIPT_LIMIT', 1)
+    target = dict(id='42', version=5, space='SD')
+    class Documents:
+        def execute(self, name, args):
+            return dict(status='read' if name == 'get_document' else 'updated', **target)
+    server = Server(documents=Documents(), codex_review=lambda t: dict(status='PASS', document='43', version=5))
+    tasks = []
+    server._submit_review = lambda task: tasks.append(task) or True
+    first = server._schedule_review(target)
+    assert server._schedule_review(target)['status'] == 'BLOCKED_ENV' and len(tasks) == 1
+    assert server._operation_status(first['operationId'], 'project')['status'] == 'queued'
+    tasks.pop()()
+    assert server._operation_status(first['operationId'], 'project')['outcome']['status'] == 'BLOCKED_ENV'
+    second = server._schedule_review(target)
+    assert second['operationId'] != first['operationId']
+    assert server._operation_status(first['operationId'], 'project')['code'] == 'operation_unavailable'
+    assert server._schedule_review(dict(target, id='not a page id'))['status'] == 'BLOCKED_ENV'
+    assert server.handle(dict(id=1, method='tools/call', params=dict(name='operation_status',
+        arguments=dict(operationId=second['operationId'], waitSeconds=21))))['error']['code'] == -32602
+
+
+@pytest.mark.parametrize('name,status,denied,connection', [
+    ('update_document', 'updated', True, 'project'), ('create_document', 'unknown', False, 'project'),
+    ('create_comment', 'created', False, 'project'), ('update_document', 'updated', False, 'personal'),
+])
+def test_no_review_on_unverified_private_or_comment_effects(name, status, denied, connection):
+    class Docs:
+        def execute(self, *args):
+            return dict(status=status, id='42', version=5, space='SD', authorizationDenied=denied)
+    docs = Docs()
+    server = Server(documents=docs, personal=docs.execute, codex_review=lambda t: pytest.fail('review scheduled'))
+    assert 'documentReview' not in server._execute(name, {}, connection)
+    reader = Server(documents=docs, reviewer=True, codex_review=lambda t: pytest.fail('reader scheduled'))
+    assert reader._codex_review is None and 'operation_status' not in {t['name'] for t in reader.tools}
+
+
 @pytest.mark.parametrize('operation,status', [('get_document', 'unavailable'), ('create_comment', 'unknown')])
 def test_private_process_failure_does_not_misreport_write_completion(monkeypatch, operation, status):
     import subprocess

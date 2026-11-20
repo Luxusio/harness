@@ -53,6 +53,9 @@ def _raise_walk(error):
 
 
 def _source_files():
+    required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
+                'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references',
+                'cursors', 'policy', 'codex_registration', 'codex_review')
     if os.name == 'nt':
         from wiki_platform import source_snapshot, trusted_source_directory
         result = {}
@@ -69,8 +72,6 @@ def _source_files():
                         if not part.endswith(('.pyc', '.pyo')):
                             path = logical / part
                             result[path.relative_to(ROOT).as_posix()] = source_snapshot(path, 16 * 1024 * 1024)[0]
-        required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
-                    'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references', 'cursors', 'policy')
         if any('wiki_atlassian/' + name + '.py' not in result for name in required):
             raise ValueError('Python wiki source is incomplete; preserve the current installation')
         for name in ('.mcp.json', 'PROVENANCE.md', 'README.md', 'pyproject.toml'):
@@ -79,8 +80,6 @@ def _source_files():
             result['scripts/' + name] = source_snapshot(HELPERS / name, 1024 * 1024)[0]
         return result
     result = {}
-    required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
-                'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references', 'cursors', 'policy')
     if any(not (ROOT / 'wiki_atlassian' / (name + '.py')).is_file() for name in required):
         raise ValueError('Python wiki source is incomplete; preserve the current installation')
     for name in PAYLOAD_DIRS:
@@ -166,6 +165,9 @@ def prepare(data_dir):
     ensure_private_directory(parent)
     files = _source_files()
     digest = hashlib.sha256((interpreter + '\0' + str(parent) + '\0').encode('utf-8'))
+    # Host manifests and launch commands are rendered below. An installer-only
+    # change must publish a fresh immutable version even with identical sources.
+    digest.update(hashlib.sha256(Path(__file__).read_bytes()).digest())
     for name, content in sorted(files.items()):
         digest.update(name.encode('utf-8') + b'\0' + content + b'\0')
     version = '0.2.0+h' + digest.hexdigest()[:16]
@@ -173,6 +175,8 @@ def prepare(data_dir):
     for name in ('.claude-plugin/plugin.json', '.codex-plugin/plugin.json'):
         value = json.loads(files[name])
         value['version'] = version
+        if name == '.codex-plugin/plugin.json':
+            value['mcpServers'] = './.codex-plugin/mcp.json'
         files[name] = (json.dumps(value, indent=2) + '\n').encode('utf-8')
     transport = json.loads(files['.mcp.json'])
     transport['mcpServers']['atlassian']['command'] = interpreter
@@ -180,6 +184,11 @@ def prepare(data_dir):
     if os.name == 'nt':
         transport['mcpServers']['atlassian']['args'] = owned_python_argv(interpreter, destination / 'plugin/scripts/launch.py')[1:]
     files['.mcp.json'] = (json.dumps(transport, indent=2) + '\n').encode('utf-8')
+    # Claude and the Antigravity companion keep their native document reviewers.
+    codex_server = transport['mcpServers']['atlassian']
+    codex_server['args'].append('--codex-host')
+    codex_server.setdefault('env_vars', []).append('CODEX_HOME')
+    files['.codex-plugin/mcp.json'] = (json.dumps(transport, indent=2) + '\n').encode('utf-8')
     with file_lock(parent / 'publish.lock', blocking=False):
         if os.path.lexists(_io_path(destination)):
             ensure_private_directory(destination)
@@ -465,16 +474,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', choices=('codex', 'claude'), action='append')
     parser.add_argument('--prepare-only', action='store_true')
+    parser.add_argument('--codex-reviewer', metavar='PROJECT', type=Path,
+                        help='Enable independent Codex CLI reviews for this profile and project after verified wiki writes')
     parser.add_argument('--antigravity-reviewer', metavar='PROJECT', type=Path,
                         help='Register the project-scoped read-only Antigravity reviewer')
     parser.add_argument('--companion-workspace', action='store_true',
                         help='Place the reviewer in a protected folder to attach to the same Antigravity Project')
     args = parser.parse_args()
+    if args.codex_reviewer and (args.antigravity_reviewer or args.companion_workspace or args.runtime or args.prepare_only):
+        parser.error('--codex-reviewer selects a separate project registration')
     if args.antigravity_reviewer and (args.prepare_only or args.runtime):
         parser.error('--antigravity-reviewer selects a separate registration')
     if args.companion_workspace and not args.antigravity_reviewer:
         parser.error('--companion-workspace requires --antigravity-reviewer PROJECT')
     try:
+        if args.codex_reviewer:
+            from wiki_atlassian.codex_registration import register
+            print('Codex reviewer registration:', register(args.codex_reviewer))
+            return 0
         if args.antigravity_reviewer:
             data = Path.home() / '.local/share/wiki-atlassian'
             payload = prepare(data)

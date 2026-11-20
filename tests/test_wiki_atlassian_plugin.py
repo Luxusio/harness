@@ -498,6 +498,11 @@ def test_actual_packaged_payload_captures_consuming_project_before_plugin_chdir(
     for name in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
         assert json.loads((packaged / name).read_text())["name"] == "wiki-atlassian"
     transport = json.loads((packaged / ".mcp.json").read_text())["mcpServers"]
+    codex_manifest = json.loads((packaged / ".codex-plugin/plugin.json").read_text())
+    codex = json.loads((packaged / codex_manifest["mcpServers"]).read_text())["mcpServers"]["atlassian"]
+    assert codex["command"] == transport["atlassian"]["command"]
+    assert codex["args"] == [*transport["atlassian"]["args"], "--codex-host"]
+    assert "CODEX_HOME" in codex["env_vars"]
     assert set(transport) == {"atlassian"}
     assert set(transport["atlassian"]["env_vars"]) == {
         "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SystemRoot", "PATH", "TEMP", "TMP", "ATLASSIAN_BASE_URL", "ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"}

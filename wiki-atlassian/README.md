@@ -322,8 +322,23 @@ python install.py --runtime claude
 ```
 
 Claude Code loads the bundled `wiki-atlassian:document-reviewer` with four
-enumerated MCP reads. Codex's plugin manifest registers skills and MCP; its
-custom agent roles are configured separately by the host.
+enumerated MCP reads. To enable independent review for an installed Codex
+profile, run `python install.py --codex-reviewer PROJECT` under that profile,
+using the absolute path of the consuming checkout. This authorizes additional
+Codex model calls for that checkout and its configured Confluence scope.
+Windows and a container use their own profile, project path and login.
+Registration prints the private file to remove to turn off future reviews.
+Restart the writing session after installing or registering.
+
+The Codex writer queues a dedicated reviewer session after a verified project
+document save. It returns a review operation ID; use `operation_status` on the
+same connection to get the verdict for that page and revision. A successful
+save can have a failed or unavailable review. Resolve that result without
+submitting the write again. The reviewer uses the project-only read transport
+and the shared document-reviewer instructions. Personal inbox operations and
+comments do not start model reviews. Combine related changes to a page
+before saving. A writer can have four reviews running or queued. If that
+capacity is occupied, the save receipt reports that its review could not start.
 
 For an Antigravity workspace, run `python install.py --antigravity-reviewer PROJECT`
 from this directory, substituting the path to the consuming project. This
