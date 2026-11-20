@@ -2031,3 +2031,22 @@ def test_claude_payload_over_old_tree_registers_no_stop_hook(tmp_path):
     assert not {"SubagentStart", "SubagentStop"} & set(hooks)
     assert not (plugin_root / "scripts" / "stop_gate.py").exists()
     assert not (plugin_root / "scripts" / "hook_stop.py").exists()
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows profile ACLs")
+def test_config_merge_accepts_readers_and_rejects_writers(tmp_path):
+    installer = _load_install_module()
+    profile = tmp_path / "codex-home"
+    installer._owned_directory(profile)
+    config = profile / "config.toml"
+    installer._write_text(config, "existing = true\n")
+    # Grant Everyone read/traverse on this fixture directory only.
+    subprocess.run(["icacls", str(profile), "/grant", "*S-1-1-0:(RX)"], check=True)
+    try:
+        assert installer._do_codex_config_install("[example]\n", config, True)[0]
+        assert "existing = true" in config.read_text()
+        subprocess.run(["icacls", str(profile), "/grant:r", "*S-1-1-0:(M)"], check=True)
+        with pytest.raises(ValueError):
+            installer._do_codex_config_install("[other]\n", config, True)
+        assert "[other]" not in config.read_text()
+    finally:
+        subprocess.run(["icacls", str(profile), "/remove:g", "*S-1-1-0"], check=True)

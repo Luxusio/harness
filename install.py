@@ -803,12 +803,16 @@ def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool)
             _dedupe_codex_marketplace_block(new_content),
             ("[mcp_servers.",),
         )
+        message = f"Merged into {config_path}; backup at {backup}"
+    else:
+        new_content = snippet
+        message = f"Wrote fresh {config_path}"
+    # On Windows the atomic writer creates and pins every parent, rejecting
+    # reparse points and foreign mutation while allowing Codex sandbox readers.
+    if os.name != "nt":
         _owned_directory(config_path.parent)
-        _write_text(config_path, new_content)
-        return True, f"Merged into {config_path}; backup at {backup}"
-    _owned_directory(config_path.parent)
-    _write_text(config_path, snippet)
-    return True, f"Wrote fresh {config_path}"
+    _write_text(config_path, new_content)
+    return True, message
 
 
 def _strip_codex_harness_sections(content: str) -> str:
