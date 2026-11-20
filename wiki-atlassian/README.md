@@ -335,6 +335,20 @@ read operations. Writes and the personal inbox are unavailable to this MCP
 process. Edited definitions are preserved. Workspace registration requires
 a trusted path for the executable agent definition.
 
+For a shared checkout, run
+`python install.py --antigravity-reviewer PROJECT --companion-workspace`.
+Add the printed folder alongside the original checkout in the same Antigravity
+Project, reload it, and select `wiki-atlassian-document-reviewer`. This keeps
+the executable agent definition in private user storage. Its launcher reads
+the selected checkout and verifies the directory identity at startup. The
+checkout contains no generated file to exclude from Git. Keep one companion
+per Antigravity Project; its project-local `mise.local.toml` must supply the
+credentials. Stop the reviewer before moving or renaming the checkout on
+Windows. A replacement checkout at the same path has a new identity. Move the
+previous companion's `.agents/agents/wiki-atlassian-document-reviewer.md`
+outside its `.agents` folder to preserve it, run the registration command
+again, and reload the Antigravity Project.
+
 These commands also run in native Windows PowerShell. The selected host CLI
 must be installed on PATH; its native executable or packaged Node entrypoint
 is invoked directly, without executing an npm batch shim through a shell.

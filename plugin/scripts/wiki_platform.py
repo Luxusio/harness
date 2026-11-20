@@ -183,6 +183,19 @@ def trusted_source_directory(path):
         yield directory
 
 
+@contextmanager
+def review_workspace_identity(path):
+    """Bind a separate protected reviewer definition to the selected directory object."""
+    path = _absolute(path)
+    if os.name == 'nt':
+        with _native.review_workspace_identity(path) as identity:
+            yield identity
+        return
+    with trusted_metadata_directory(path):
+        stat = path.stat(follow_symlinks=False)
+        yield f'posix-{stat.st_dev:x}-{stat.st_ino:x}'
+
+
 def _metadata_identity(info):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_uid,
             info.st_nlink, info.st_mtime_ns, info.st_ctime_ns)

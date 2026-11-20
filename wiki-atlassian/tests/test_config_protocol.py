@@ -80,6 +80,17 @@ def test_shared_settings_keep_private_origin_pin_and_nested_repository_boundary(
     assert Project.from_project(nested, env) is None
 
 
+def test_bound_reviewer_requires_exact_project_file_credentials(tmp_path):
+    manifest = tmp_path / 'doc/harness/manifest.yaml'
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({'wiki': {'backend': 'atlassian', **project_value()}}), encoding='utf-8')
+    environment = {'ATLASSIAN_BASE_URL': 'https://wiki.example.invalid', 'ATLASSIAN_EMAIL': 'host@example.invalid',
+                   'ATLASSIAN_API_TOKEN': 'fixture', 'HOME': str(tmp_path), 'USERPROFILE': str(tmp_path)}
+    assert Project.from_project(tmp_path, environment) is not None
+    with pytest.raises(ValueError, match='connection or authentication unavailable'):
+        Project.from_project(tmp_path, environment, bound_reviewer=True)
+
+
 def test_public_tool_names_and_strict_types_are_preserved():
     assert set(SCHEMAS) == {'connection_status', 'search_documents', 'document_relations',
         'get_document', 'create_document', 'update_document', 'operation_status',

@@ -117,9 +117,18 @@ def main(argv=None):
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--personal-operation', action='store_true', help=argparse.SUPPRESS)
     modes.add_argument('--reviewer', action='store_true', help='Serve the four project-only document review operations')
+    parser.add_argument('--reviewer-project-id', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if not args.project_root.is_absolute() or not args.project_root.is_dir():
         parser.error('--project-root must be an existing absolute startup directory')
+    if args.reviewer_project_id is not None:
+        if not args.reviewer:
+            parser.error('--reviewer-project-id requires --reviewer')
+        from wiki_platform import review_workspace_identity
+        with review_workspace_identity(args.project_root) as identity:
+            if identity != args.reviewer_project_id:
+                parser.error('The selected reviewer project has changed; review and register it again')
+            return _serve(args)
     if args.personal_operation:
         previous_handler = signal.signal(signal.SIGTERM, terminate)
         try:
@@ -136,6 +145,10 @@ def main(argv=None):
             return 0
         finally:
             signal.signal(signal.SIGTERM, previous_handler)
+    return _serve(args)
+
+
+def _serve(args):
     # This helper is packaged beside this code, never discovered in project cwd.
     import personal_feedback
     home = home_directory()
@@ -144,7 +157,7 @@ def main(argv=None):
     documents = None
     unavailable = False
     try:
-        project = Project.from_project(args.project_root)
+        project = Project.from_project(args.project_root, bound_reviewer=bool(args.reviewer_project_id))
     except ValueError:
         if personal is None:
             sys.stderr.write('Atlassian project connection or authentication unavailable\n')

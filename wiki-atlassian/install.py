@@ -373,7 +373,7 @@ def _failure_reason(exc, generic):
     return generic
 
 
-def antigravity_reviewer(payload, project):
+def antigravity_reviewer(payload, project, *, project_id=None):
     """Render Antigravity's agent-local MCP with the same project and owned entry as the writer."""
     from wiki_atlassian.tools import REVIEW_TOOLS
 
@@ -385,31 +385,59 @@ def antigravity_reviewer(payload, project):
     connection = {'name': 'atlassian', 'command': server['command'],
                   'args': [*server['args'], '--reviewer', '--project-root', str(project)],
                   'cwd': str(project), 'enabledTools': list(REVIEW_TOOLS)}
+    if project_id is not None:
+        connection['args'].extend(['--reviewer-project-id', project_id])
     # Each value is JSON, which is also a YAML flow value. Paths and argv remain literal.
     fields = {'name': 'document-reviewer', 'description': 'Independently review stored project wiki revisions and repository sources.',
               'subagent': True, 'mainAgent': False, 'inheritMcp': False, 'inheritCustomizations': False,
               'tools': ['view_file', 'grep_search', 'call_mcp_tool', 'send_message'], 'mcpServers': [connection]}
+    if project_id is not None:
+        fields['name'] = 'wiki-atlassian-document-reviewer'
+        fields['description'] = (
+            'Use for independent verification of project requirements, proposals and attributed human decisions '
+            'against stored Confluence sources, revisions and evidence. '
+            '요구사항·기획안·사람의 결정을 원문과 대조하거나 문서 이관을 검수할 때 위임합니다. '
+            '일상적인 문서 검색·단순 조회는 주 에이전트가 처리합니다.')
     header = '\n'.join(f'{key}: {json.dumps(value)}' for key, value in fields.items())
     return (f'---\n{header}\n---\n<!-- wiki-atlassian reviewer {payload.name} -->\n' + body.lstrip()).encode('utf-8')
 
 
-def register_antigravity_reviewer(payload, project):
-    project = project.expanduser().resolve(strict=True)
+def register_antigravity_reviewer(payload, project, *, companion_root=None):
+    project = project.expanduser().absolute()
     if not project.is_dir():
         raise ValueError('Choose the consuming project directory')
-    agents = project / '.agents/agents'
+    if companion_root is None:
+        return _register_reviewer(payload, project, project)
+    from document_destination import _project_root
+    from wiki_platform import review_workspace_identity
+
+    with review_workspace_identity(project) as identity:
+        if _project_root(project) != project:
+            raise ValueError('Choose the consuming project root, not a subdirectory')
+        key = hashlib.sha256(os.fsencode(os.path.normcase(str(project)))).hexdigest()[:20]
+        workspace = companion_root / key
+        return _register_reviewer(payload, project, workspace, project_id=identity)
+
+
+def _register_reviewer(payload, project, workspace, *, project_id=None):
+    agents = workspace / '.agents/agents'
     ensure_private_directory(agents)
-    target = agents / 'document-reviewer.md'
-    current = antigravity_reviewer(payload, project)
+    target = agents / ('wiki-atlassian-document-reviewer.md' if project_id else 'document-reviewer.md')
+    current = antigravity_reviewer(payload, project, project_id=project_id)
     with file_lock(payload.parent / 'reviewer-registration.lock', blocking=False):
+        old = None
         if os.path.lexists(_io_path(target)):
             old = safe_metadata_read(target, 65536)
             if old == current:
                 return target
             marker = re.search(rb'^<!-- wiki-atlassian reviewer (0\.2\.0\+h[0-9a-f]{16}) -->$', old, re.M)
-            if not marker or antigravity_reviewer(payload.parent / marker[1].decode('ascii'), project) != old:
+            if not marker or antigravity_reviewer(payload.parent / marker[1].decode('ascii'), project, project_id=project_id) != old:
                 raise ValueError('Existing Antigravity reviewer differs; preserve the local definition')
-        atomic_write(target, current)
+        if os.name == 'nt':
+            from wiki_platform import metadata_write
+            metadata_write(target, current, expected=old)
+        else:
+            atomic_write(target, current)
         if safe_metadata_read(target, 65536) != current:
             raise ValueError('Antigravity reviewer readback differs')
     return target
@@ -424,13 +452,23 @@ def main():
     parser.add_argument('--prepare-only', action='store_true')
     parser.add_argument('--antigravity-reviewer', metavar='PROJECT', type=Path,
                         help='Register the project-scoped read-only Antigravity reviewer')
+    parser.add_argument('--companion-workspace', action='store_true',
+                        help='Place the reviewer in a protected folder to attach to the same Antigravity Project')
     args = parser.parse_args()
     if args.antigravity_reviewer and (args.prepare_only or args.runtime):
         parser.error('--antigravity-reviewer selects a separate registration')
+    if args.companion_workspace and not args.antigravity_reviewer:
+        parser.error('--companion-workspace requires --antigravity-reviewer PROJECT')
     try:
         if args.antigravity_reviewer:
-            payload = prepare(Path.home() / '.local/share/wiki-atlassian')
-            print(register_antigravity_reviewer(payload, args.antigravity_reviewer))
+            data = Path.home() / '.local/share/wiki-atlassian'
+            payload = prepare(data)
+            target = register_antigravity_reviewer(payload, args.antigravity_reviewer,
+                                                  companion_root=data / 'review-workspaces' if args.companion_workspace else None)
+            if args.companion_workspace:
+                print('Add this folder to the same Antigravity Project:', target.parents[2])
+            else:
+                print(target)
             return 0
         runtimes = args.runtime or [name for name in ('codex', 'claude') if shutil.which(name)]
         if not runtimes and not args.prepare_only:

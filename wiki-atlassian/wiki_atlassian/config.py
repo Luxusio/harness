@@ -159,11 +159,17 @@ class Project:
         return SpaceSettings(value, self.credentials, self.corpus_root(key))
 
     @classmethod
-    def from_project(cls, startup, environment=None):
+    def from_project(cls, startup, environment=None, *, bound_reviewer=False):
         from document_destination import _project_root, _read_config, _origin, _validate_config
         environment = dict(os.environ if environment is None else environment)
         try:
             root = _project_root(startup)
+            if bound_reviewer:
+                if Path(root) != Path(startup):
+                    raise ValueError('Reviewer registration must identify the consuming project root')
+                # A companion has no authority over an account supplied by the host.
+                # The normal loader already verifies every mise field's file of origin.
+                environment = {key: value for key, value in environment.items() if key.upper() not in AUTH_FIELDS}
             value = _read_config(str(root))
             if value is None:
                 return None

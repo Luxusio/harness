@@ -541,6 +541,14 @@ def trusted_source_directory(path):
         yield path
 
 
+@contextmanager
+def review_workspace_identity(path):
+    """Hold the selected ordinary project and all its names while the reviewer runs."""
+    with _walk(path, owner_neutral=True) as (_, handle):
+        volume, high, low = _identity(handle)
+        yield f'win-{volume:08x}-{high:08x}{low:08x}'
+
+
 def _metadata_free_stamp(handle):
     info = _info(handle)
     times = tuple((value.dwHighDateTime << 32) | value.dwLowDateTime

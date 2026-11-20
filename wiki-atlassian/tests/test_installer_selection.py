@@ -76,6 +76,52 @@ def test_registered_reviewers_allow_only_document_reads(installer, tmp_path):
         assert request('tools/call', name=write, arguments={})['error']['code'] == -32602
 
 
+def test_companion_reviewer_is_project_bound_and_preserves_local_edits(installer, tmp_path, monkeypatch):
+    from wiki_atlassian import main as runtime
+    from wiki_platform import review_workspace_identity
+
+    module, payload, _ = installer
+    project = tmp_path / 'checkout'
+    module.ensure_private_directory(project)
+    (project / '.git').mkdir()
+    plugin = payload / 'plugin'
+    module.ensure_private_directory(plugin / 'agents')
+    module.atomic_write(plugin / 'agents/document-reviewer.md', (module.ROOT / 'agents/document-reviewer.md').read_bytes())
+    transport = {'mcpServers': {'atlassian': {'command': sys.executable, 'args': ['launch.py']}}}
+    module.atomic_write(plugin / '.mcp.json', json.dumps(transport).encode())
+    companions = tmp_path / 'private-user-data'
+    child = project / 'nested'
+    child.mkdir()
+    with pytest.raises(ValueError, match='consuming project root'):
+        module.register_antigravity_reviewer(payload, child, companion_root=companions)
+    if os.name == 'nt':
+        junction = tmp_path / 'project-alias'
+        subprocess.run(['cmd', '/d', '/c', 'mklink', '/J', str(junction), str(project)],
+                       check=True, capture_output=True)
+        try:
+            with pytest.raises(ValueError, match='nonlinked'):
+                module.register_antigravity_reviewer(payload, junction, companion_root=companions)
+        finally:
+            junction.rmdir()
+    target = module.register_antigravity_reviewer(payload, project, companion_root=companions)
+    assert target.is_relative_to(companions) and not (project / '.agents').exists()
+    body = target.read_text(encoding='utf-8')
+    config = yaml.safe_load(body.split('---', 2)[1])
+    assert config['name'] == target.stem == 'wiki-atlassian-document-reviewer'
+    server, = config['mcpServers']
+    with review_workspace_identity(project) as identity:
+        assert server['args'][1:] == ['--reviewer', '--project-root', str(project), '--reviewer-project-id', identity]
+    monkeypatch.setattr(runtime, '_serve', lambda args: 73)
+    assert runtime.main(server['args'][1:]) == 73
+    project.rename(tmp_path / 'original-checkout')
+    module.ensure_private_directory(project)
+    with pytest.raises(SystemExit):
+        runtime.main(server['args'][1:])
+    with pytest.raises(ValueError, match='differs'):
+        module.register_antigravity_reviewer(payload, project, companion_root=companions)
+    assert target.read_text(encoding='utf-8') == body
+
+
 @pytest.mark.parametrize('runtime', ['codex', 'claude'])
 def test_cli_success_cannot_accept_old_native_cache_bytes(installer, monkeypatch, runtime):
     module, payload, home = installer

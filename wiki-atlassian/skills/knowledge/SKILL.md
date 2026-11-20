@@ -79,6 +79,8 @@ Antigravity discovers the workspace role created by
 `python wiki-atlassian/install.py --antigravity-reviewer PROJECT`. Reload the
 project after registration and select `document-reviewer`. Its MCP uses the same
 managed project launcher with a project-only read scope.
+For a shared checkout, use the `wiki-atlassian-document-reviewer` role in
+the private companion folder attached to the same Antigravity Project.
 For another host, delegate only when it exposes a reviewer restricted to local
 source reads and the four named wiki reads. If the host cannot provide that
 tool surface, report the independent review as BLOCKED_ENV with the missing
