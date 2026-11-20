@@ -67,6 +67,12 @@ class Server:
             value = self.personal(name, args)
         elif connection == 'project' and self.documents is not None:
             value = self.documents.execute(name, args)
+            if (name in ('create_document', 'update_document') and value.get('status') in ('created', 'updated')
+                    and not value.get('authorizationDenied')):
+                value = {**value, 'reviewInstruction': (
+                    'Before completing this authoring task, invoke the independent wiki-atlassian document reviewer '
+                    'with this saved page ID, version and its sources. Batch related saved revisions in one review. '
+                    'If the host has no restricted reviewer, report the pending review.')}
         else:
             value = {'status': 'error', 'code': 'connection_unavailable',
                      'message': 'The selected connection is unavailable; inspect its own settings and authentication. No fallback was used.'}
@@ -106,7 +112,7 @@ class Server:
             except Exception:
                 outcome = self._unknown('update_document')
             fields = ('status', 'code', 'message', 'id', 'version', 'url', 'space', 'spaceId',
-                      'syncRequired', 'authorizationDenied', 'details', 'next', 'requestHash')
+                      'syncRequired', 'authorizationDenied', 'details', 'next', 'requestHash', 'reviewInstruction')
             with self._receipt_lock:
                 receipt.update(status='finished', outcome={key: outcome[key] for key in fields if key in outcome})
 

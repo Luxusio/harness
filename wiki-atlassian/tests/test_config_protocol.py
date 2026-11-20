@@ -175,6 +175,38 @@ def test_private_tool_exceptions_do_not_echo_credentials():
     assert 'secret-do-not-print' not in json.dumps(value)
 
 
+@pytest.mark.parametrize('operation,status,connection,expected', [
+    ('create_document', 'created', 'project', True),
+    ('update_document', 'updated', 'project', True),
+    ('update_document', 'unknown', 'project', False),
+    ('update_document', 'error', 'project', False),
+    ('create_comment', 'created', 'project', False),
+    ('update_document', 'updated', 'personal', False),
+    ('get_document', 'read', 'project', False),
+])
+def test_review_handoff_on_verified_project_document_writes(operation, status, connection, expected):
+    class Documents:
+        def execute(self, name, args):
+            return {'status': status, 'id': '42', 'version': 5}
+
+    docs = Documents()
+    result = Server(documents=docs, personal=docs.execute)._execute(operation, {}, connection)
+    assert ('reviewInstruction' in result) is expected
+    assert (result['id'], result['version']) == ('42', 5)
+
+
+@pytest.mark.parametrize('denied', [False, True])
+def test_review_handoff_after_verified_save_preserves_access_fence(denied):
+    class Documents:
+        def execute(self, name, args):
+            return {'status': 'updated', 'id': '42', 'version': 5, 'syncRequired': True,
+                    'authorizationDenied': denied, 'next': 'Inspect access and sync state.'}
+
+    result = Server(documents=Documents())._execute('update_document', {}, 'project')
+    assert ('reviewInstruction' in result) is (not denied)
+    assert result['next'] == 'Inspect access and sync state.'
+
+
 def test_deferred_update_does_not_block_reads_and_keeps_a_single_bounded_write_lane():
     requests, replies = Queue(), Queue()
     started, release = threading.Event(), threading.Event()
@@ -201,6 +233,8 @@ def test_deferred_update_does_not_block_reads_and_keeps_a_single_bounded_write_l
                     return {'status': 'error', 'code': 'version_conflict'}
                 if args['version'] == 6:
                     raise OSError('private provider details')
+                if args['version'] == 7:
+                    return {'status': 'updated', 'authorizationDenied': True, 'next': 'Restore access before reading.'}
                 return {'status': 'updated', 'id': args['document'], 'version': args['version'] + 1}
             assert operation == 'get_document'
             return {'status': 'read', 'version': 4}
@@ -238,10 +272,15 @@ def test_deferred_update_does_not_block_reads_and_keeps_a_single_bounded_write_l
 
     assert not thread.is_alive() and applied == list(range(4, 12))
     receipt = server._operation_status(op, 'project')
-    assert receipt['status'] == 'finished' and receipt['outcome'] == {'status': 'updated', 'id': '42', 'version': 5}
+    assert receipt['status'] == 'finished'
+    outcome = receipt['outcome']
+    assert (outcome['status'], outcome['id'], outcome['version']) == ('updated', '42', 5)
+    assert 'document reviewer' in outcome['reviewInstruction']
     assert server._operation_status(queued[5], 'project')['outcome']['code'] == 'version_conflict'
     unknown = server._operation_status(queued[6], 'project')
     assert unknown['outcome']['status'] == 'unknown' and 'private provider details' not in str(unknown)
+    denied = server._operation_status(queued[7], 'project')['outcome']
+    assert denied == {'status': 'updated', 'authorizationDenied': True, 'next': 'Restore access before reading.'}
 
 
 def test_overflowing_numeric_rpc_id_is_refused_before_dispatch_and_stream_survives():
