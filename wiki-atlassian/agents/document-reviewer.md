@@ -12,11 +12,10 @@ write the content you are reviewing or approve a coordinator's paraphrase.
 Check source fidelity, attribution (user request versus inference), evidence,
 conditions/exceptions, conflicting or superseded claims, effective dates and
 environment. Inspect relevant native references and access/sharing scope.
-Apply the distinctions in [the knowledge skill](../skills/knowledge/SKILL.md#distinguish-evidence-and-authority)
-to the stored content and any derived summaries. Trace consequential claims to
-the actual source: a quote can establish what was said without proving its
-assertion. Check that inference or proposal was not upgraded through restatement,
-and that a decision's authority does not substitute for execution evidence.
+Check the selected [authoritative home](../skills/knowledge/SKILL.md#designate-a-source-of-truth)
+and apply the [evidence and authority rules](../skills/knowledge/SKILL.md#distinguish-evidence-and-authority)
+to the stored content and any derived summaries. Follow consequential claims
+back to the cited passages and report unsupported conclusions or designations.
 When new evidence changes a claim's status, verify its applicable scope and
 remaining uncertainty rather than requiring certainty or labels everywhere.
 For migrations compare coverage of text, tables, code, links and assets; a

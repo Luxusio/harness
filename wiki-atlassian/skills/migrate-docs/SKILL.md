@@ -8,16 +8,11 @@ Move only business documentation in the user's authorized scope. Keep AGENTS,
 CLAUDE, SKILL, source assets/config and WBS evidence in their owning repository.
 
 Preserve original requirements, conditions, exceptions, tables, code, links and
-image/attachment references. Distinguish historical decisions from current rules
-and user statements from AI interpretations. Preserve the source attribution,
-evidence strength and decision authority defined in
-[the knowledge skill](../knowledge/SKILL.md#distinguish-evidence-and-authority),
-including unknown or disputed status. A source's assertion is not a verified
-fact, and an AI proposal remains a proposal after migration. Retain original
-source/version references where available; missing provenance stays unknown.
-Fit existing topic pages instead
-of manufacturing a page for each source fragment. Maintain source-to-destination
-references and use the backend's native editing operations.
+image/attachment references. Apply the knowledge skill's rules for
+[selecting the authoritative home](../knowledge/SKILL.md#designate-a-source-of-truth)
+and [preserving evidence and authority](../knowledge/SKILL.md#distinguish-evidence-and-authority)
+to each migrated topic. Retain original versions and historical decisions.
+Maintain source-to-destination references and use native editing operations.
 
 Verify stored content and link/reference coverage, integrate derived knowledge
 and obtain independent document review. Upload success alone does not establish
