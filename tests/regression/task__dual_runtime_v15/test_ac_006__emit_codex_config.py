@@ -190,6 +190,54 @@ def test_force_merge_removes_orphan_plugin_and_marketplace_tables(tmp_path):
     assert '[projects."/project/example"]' in cfg.read_text()
 
 
+def test_force_merge_replaces_nested_legacy_env_and_keeps_ccc(tmp_path):
+    module = _load_install_module()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '# Keep the next header in this comment\u2028[mcp_servers.harness]\n'
+        'model = "keep"\n'
+        'developer_instructions = """\n'
+        '[mcp_servers.harness.env]\n'
+        'This is an example in a multiline string.\n'
+        '"""\n'
+        '[mcp_servers.harness]\ncommand = """\n# ccc-managed-mcp begin\nold\n"""\n'
+        '[ mcp_servers . "harness" . env ] # written by Codex\n'
+        'HARNESS_PLUGIN_ROOT = "/old"\n'
+        '# ccc-managed-mcp begin\n'
+        '[mcp_servers.another]\ncommand = "keep"\n'
+        '[mcp_servers.another.env]\nCUSTOM = "keep"\n'
+        '[[mcp_servers.another.example]]\nname = "first"\n'
+        '[[mcp_servers.another.example]]\nname = "second"\n'
+        '# ccc-managed-mcp end\n',
+        encoding="utf-8",
+    )
+    before = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    for _ in range(2):
+        result = module.emit_and_install_codex_config(str(PLUGIN_ROOT), config_path=cfg, force=True)
+        assert result["ok"], result["message"]
+    content = cfg.read_text(encoding="utf-8")
+    parsed = tomllib.loads(content)
+    assert parsed["developer_instructions"] == before["developer_instructions"]
+    assert parsed["model"] == "keep"
+    assert parsed["mcp_servers"]["another"] == before["mcp_servers"]["another"]
+    assert parsed["mcp_servers"]["harness"]["env"]["HARNESS_PLUGIN_ROOT"] != "/old"
+    assert content.count("# ccc-managed-mcp begin") == 1
+    assert content.count("# ccc-managed-mcp end") == 1
+    assert content.count("emitted by install.py") == 1
+
+
+def test_invalid_codex_merge_does_not_write_or_expose_config(tmp_path):
+    module = _load_install_module()
+    cfg = tmp_path / "config.toml"
+    original = b'mcp_servers.harness.env = { CUSTOM = "private-value" }\n'
+    cfg.write_bytes(original)
+    result = module.emit_and_install_codex_config(str(PLUGIN_ROOT), config_path=cfg, force=True)
+    assert not result["ok"]
+    assert "invalid TOML" in result["message"]
+    assert "private-value" not in result["message"]
+    assert cfg.read_bytes() == original
+
+
 def test_force_merge_is_idempotent_for_harness_owned_blocks(tmp_path):
     module = _load_install_module()
     cfg = tmp_path / "config.toml"

@@ -327,7 +327,7 @@ page: "https://YOUR-SITE.atlassian.net/wiki/spaces/TEAM/pages/123456"
 To authorize future automatic reports, create a separate owner-private
 `~/.config/harness/friction-consent.yaml` containing the same `backend` and
 `page` plus `auto_report_friction: true`. Remove it to revoke that opt-in.
-Harness checks the approved site and page before sending. The coordinator
+The packaged `friction_consent.py` checks the approved site and page before sending. The coordinator
 redacts evidence, checks for existing reports and continues the original task.
 An explicit user instruction may authorize reports to the specified inbox.
 

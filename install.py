@@ -52,6 +52,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from contextvars import ContextVar
@@ -771,10 +772,16 @@ def emit_codex_config(plugin_root: str, config_path: str | Path | None = None) -
 
 
 def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool) -> tuple[bool, str]:
+    backup = None
     if _lexists(config_path):
         existing = _read_text(config_path)
+        lines = _toml_lines(existing)
+        try:
+            sections = list(_codex_toml_sections(lines))
+        except tomllib.TOMLDecodeError:
+            return False, "Codex config contains an invalid TOML section; original left intact."
         if (
-            ("[mcp_servers.harness]" in existing or f'[plugins."{CODEX_PLUGIN_ID}"]' in existing)
+            any(_harness_codex_table(path) for _, _, path in sections)
             and not force_merge
         ):
             return (
@@ -787,26 +794,31 @@ def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool)
             )
         timestamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = config_path.with_suffix(config_path.suffix + f".bak.{timestamp}")
-        _copy_file(config_path, backup) if os.name == "nt" else shutil.copy2(config_path, backup)
         if force_merge:
-            stripped = _dedupe_codex_toml_tables(
-                _strip_codex_harness_sections(existing),
-                ("[mcp_servers.",),
-            )
+            stripped = _strip_codex_harness_sections(lines, sections)
+            try:
+                tomllib.loads(stripped)
+            except tomllib.TOMLDecodeError:
+                stripped = _dedupe_codex_toml_tables(stripped)
             if stripped.strip():
                 new_content = stripped.rstrip("\n") + "\n\n" + snippet
             else:
                 new_content = snippet
         else:
             new_content = existing.rstrip("\n") + "\n\n" + snippet
-        new_content = _dedupe_codex_toml_tables(
-            _dedupe_codex_marketplace_block(new_content),
-            ("[mcp_servers.",),
-        )
         message = f"Merged into {config_path}; backup at {backup}"
     else:
         new_content = snippet
         message = f"Wrote fresh {config_path}"
+    try:
+        tomllib.loads(new_content)
+    except tomllib.TOMLDecodeError as error:
+        # Validation errors can contain user-supplied config text.
+        location = re.search(r"at line \d+, column \d+", str(error))
+        suffix = f" ({location.group()})" if location else ""
+        return False, f"Codex config merge produced invalid TOML{suffix}; original left intact."
+    if backup is not None:
+        _copy_file(config_path, backup) if os.name == "nt" else shutil.copy2(config_path, backup)
     # On Windows the atomic writer creates and pins every parent, rejecting
     # reparse points and foreign mutation while allowing Codex sandbox readers.
     if os.name != "nt":
@@ -815,87 +827,93 @@ def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool)
     return True, message
 
 
-def _strip_codex_harness_sections(content: str) -> str:
-    """Remove all harness-owned TOML tables and generated harness blocks."""
-    target_tables = {
-        f'[plugins."{CODEX_PLUGIN_ID}"]',
-        f"[marketplaces.{CODEX_PLUGIN_MARKETPLACE}]",
-        "[mcp_servers.harness]",
+def _toml_lines(content: str) -> list[str]:
+    parts = content.split("\n")
+    return [line + "\n" for line in parts[:-1]] + parts[-1:]
+
+
+def _codex_toml_sections(lines):
+    """Yield real TOML table spans, excluding header-like lines inside values."""
+    start, path = 0, ()
+    for index, line in enumerate(lines):
+        if not line.lstrip().startswith("["):
+            continue
+        try:
+            table = tomllib.loads(line)
+            # An isolated table header outside a string must also follow a
+            # complete table body. Parse chunks so duplicate legacy sections
+            # in the whole profile can still be repaired.
+            tomllib.loads("".join(lines[start:index]))
+        except tomllib.TOMLDecodeError:
+            continue
+        keys = []
+        while table:
+            key, table = next(iter(table.items()))
+            keys.append(key)
+            if isinstance(table, list):
+                table = table[0]
+        if keys:
+            yield start, index, path
+            start, path = index, tuple(keys)
+    # If a malformed table prevented us from identifying a later boundary,
+    # never discard that remainder as part of a managed table.
+    tomllib.loads("".join(lines[start:]))
+    yield start, len(lines), path
+
+
+def _harness_codex_table(path) -> bool:
+    return path[:2] in {
+        ("plugins", CODEX_PLUGIN_ID),
+        ("marketplaces", CODEX_PLUGIN_MARKETPLACE),
+        ("mcp_servers", "harness"),
     }
-    lines = content.splitlines()
-    out: list[str] = []
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if stripped.startswith("# harness v") or (
-            stripped.startswith("# ─") and i + 1 < len(lines) and lines[i + 1].strip().startswith("# harness v")
-        ):
-            i += 1
-            while i < len(lines) and (not lines[i].strip() or lines[i].strip().startswith("#")):
-                i += 1
+
+
+def _codex_ccc_markers(lines):
+    for index, line in enumerate(lines):
+        if line.strip() not in {"# ccc-managed-mcp begin", "# ccc-managed-mcp end"}:
             continue
-        if stripped in target_tables:
-            i += 1
-            while i < len(lines):
-                next_stripped = lines[i].strip()
-                if next_stripped.startswith("[") or next_stripped == "# ccc-managed-mcp begin" or next_stripped.startswith("# harness v"):
-                    break
-                i += 1
+        try:
+            tomllib.loads("".join(lines[:index]))
+        except tomllib.TOMLDecodeError:
             continue
-        out.append(lines[i])
-        i += 1
-    return "\n".join(out).strip("\n") + ("\n" if out else "")
+        yield line
 
 
-def _dedupe_codex_marketplace_block(content: str) -> str:
-    lines = content.splitlines()
-    out: list[str] = []
-    seen = False
-    i = 0
-    while i < len(lines):
-        if lines[i].strip() == f"[marketplaces.{CODEX_PLUGIN_MARKETPLACE}]":
-            if seen:
-                i += 1
-                while i < len(lines) and not lines[i].startswith("[") and not lines[i].startswith("# ccc-managed-mcp end"):
-                    i += 1
-                continue
-            seen = True
-        out.append(lines[i])
-        i += 1
-    return "\n".join(out).rstrip("\n") + "\n"
+def _strip_codex_harness_sections(lines, sections) -> str:
+    """Replace the managed tables, including env and tool overrides."""
+    kept = []
+    for start, end, path in sections:
+        if not _harness_codex_table(path):
+            section = "".join(lines[start:end])
+            # Only the complete generated banner at the end of a parsed
+            # section is ours. Never match banner text inside a TOML value.
+            section = re.sub(
+                r"(?m)^# ─+\r?\n# harness v[^\n]* — emitted by install\.py\r?\n"
+                r"# Plugin root: [^\n]*\n# Generated: [^\n]*\n# ─+\r?\n\s*"
+                r"(?:# Marks the local harness plugin as installed/enabled in Codex\.\r?\n)?\Z",
+                "", section,
+            )
+            kept.append(section)
+            continue
+        # CCC's sentinels are outside the TOML ownership of these tables.
+        kept.extend(_codex_ccc_markers(lines[start:end]))
+    return "".join(kept)
 
 
-def _dedupe_codex_toml_tables(content: str, prefixes: tuple[str, ...]) -> str:
-    """Keep the newest occurrence of duplicate TOML tables for selected prefixes."""
-    lines = content.splitlines()
-    spans: list[tuple[int, int, str]] = []
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            table = stripped
-            if any(table.startswith(prefix) for prefix in prefixes):
-                start = i
-                i += 1
-                while i < len(lines):
-                    next_stripped = lines[i].strip()
-                    if next_stripped.startswith("[") and next_stripped.endswith("]"):
-                        break
-                    i += 1
-                spans.append((start, i, table))
-                continue
-        i += 1
-
-    last_span_index = {table: index for index, (_, _, table) in enumerate(spans)}
-    remove: set[int] = set()
-    for index, (start, end, table) in enumerate(spans):
-        if last_span_index[table] != index:
-            remove.update(range(start, end))
-    if not remove:
-        return content.rstrip("\n") + ("\n" if content else "")
-
-    out = [line for index, line in enumerate(lines) if index not in remove]
-    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
+def _dedupe_codex_toml_tables(content: str) -> str:
+    """Keep the newest duplicate MCP table from a legacy generated profile."""
+    lines = _toml_lines(content)
+    sections = list(_codex_toml_sections(lines))
+    latest = {path: start for start, _, path in sections
+              if len(path) == 2 and path[0] == "mcp_servers"
+              and not lines[start].lstrip().startswith("[[")}
+    return "".join(
+        "".join(lines[start:end]) if latest.get(path, start) == start
+        or lines[start].lstrip().startswith("[[")
+        else "".join(_codex_ccc_markers(lines[start:end]))
+        for start, end, path in sections
+    )
 
 
 def emit_and_install_codex_config(
@@ -1869,61 +1887,6 @@ def _toml_escape_basic(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _existing_hook_state_enabled_lines(content: str, keys: set[str]) -> dict[str, str]:
-    lines = content.splitlines()
-    enabled: dict[str, str] = {}
-    wanted_tables = {f'[hooks.state."{_toml_escape_basic(key)}"]': key for key in keys}
-    i = 0
-    while i < len(lines):
-        key = wanted_tables.get(lines[i].strip())
-        if not key:
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and not lines[i].strip().startswith("["):
-            stripped = lines[i].strip()
-            if stripped.startswith("enabled "):
-                enabled[key] = stripped
-            i += 1
-    return enabled
-
-
-def _strip_codex_hook_state_tables(content: str, keys: set[str]) -> str:
-    if not keys:
-        return content
-    target_tables = {f'[hooks.state."{_toml_escape_basic(key)}"]' for key in keys}
-    lines = content.splitlines()
-    out: list[str] = []
-    i = 0
-    while i < len(lines):
-        if lines[i].strip() in target_tables:
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("["):
-                i += 1
-            continue
-        out.append(lines[i])
-        i += 1
-    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
-
-
-def _dedupe_hooks_state_parent_table(content: str) -> str:
-    """Keep at most one bare [hooks.state] parent table.
-
-    Codex itself may already have emitted the parent table. Re-emitting it makes
-    TOML parsing fail with a duplicate-key error, so installers must only keep
-    the first occurrence.
-    """
-    out: list[str] = []
-    seen = False
-    for line in content.splitlines():
-        if line.strip() == "[hooks.state]":
-            if seen:
-                continue
-            seen = True
-        out.append(line)
-    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
-
-
 def _codex_hook_trust_block(state: dict[str, str], enabled_lines: dict[str, str] | None = None) -> str:
     if not state:
         return ""
@@ -1953,13 +1916,28 @@ def install_codex_hook_trust_state(
     state = _codex_hook_trust_state(plugin_id, hooks_config)
     if not state:
         return {"ok": True, "message": "no Codex hook trust state to write", "state": state}
-    existing = _read_text(cfg)
-    enabled_lines = _existing_hook_state_enabled_lines(existing, set(state))
-    stripped = _dedupe_hooks_state_parent_table(
-        _strip_codex_hook_state_tables(existing, set(state))
-    ).rstrip("\n")
-    block = _codex_hook_trust_block(state, enabled_lines)
-    _write_text(cfg, (stripped + "\n\n" + block).lstrip("\n"))
+    lines = _toml_lines(_read_text(cfg))
+    enabled_lines = {}
+    kept = []
+    try:
+        for start, end, path in _codex_toml_sections(lines):
+            section = "".join(lines[start:end])
+            if len(path) == 3 and path[:2] == ("hooks", "state") and path[2] in state:
+                entry = tomllib.loads(section)["hooks"]["state"][path[2]]
+                if not isinstance(entry, dict):
+                    return {"ok": False, "message": "Invalid Codex hook state table; original left intact.", "state": {}}
+                enabled = entry.get("enabled")
+                if isinstance(enabled, bool):
+                    enabled_lines[path[2]] = f"enabled = {str(enabled).lower()}"
+                kept.extend(_codex_ccc_markers(lines[start:end]))
+            else:
+                kept.append(section)
+        block = _codex_hook_trust_block(state, enabled_lines)
+        merged = ("".join(kept).rstrip("\n") + "\n\n" + block).lstrip("\n")
+        tomllib.loads(merged)
+    except tomllib.TOMLDecodeError:
+        return {"ok": False, "message": "Codex hook trust merge produced invalid TOML; original left intact.", "state": {}}
+    _write_text(cfg, merged)
     return {
         "ok": True,
         "message": f"trusted {len(state)} Codex harness hooks in {cfg}",
