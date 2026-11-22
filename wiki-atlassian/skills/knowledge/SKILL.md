@@ -20,6 +20,9 @@ For Jira projects configured in `wiki.jiraProjects`, use `get_jira_issue`
 with an exact key and `add_jira_comment` for authorized comments. The Jira
 tools use the project connection. If a comment's outcome is unknown, inspect
 the issue with `includeComments: true` before considering another submission.
+For a requested status change, first use `list_jira_transitions` and confirm the
+workflow destination. Pass the returned IDs to `transition_jira_issue` and
+check the saved status. Re-read the issue after an uncertain result.
 
 Search for relevant documents, inspect the returned passages and expand the
 necessary sections or source documents. Distinguish missing results from absent

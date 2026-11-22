@@ -1,4 +1,4 @@
-"""Project-scoped Jira Cloud issue reads and verified comment writes."""
+"""Project-scoped Jira Cloud issue reads and verified mutations."""
 from __future__ import annotations
 
 from html import escape
@@ -82,6 +82,67 @@ class Jira(Remote):
         return self._unknown(key, comment_id)
 
     @staticmethod
+    def _status(value):
+        if not isinstance(value, dict) or not isinstance(value.get('name'), str) or not value['name'].strip():
+            raise RemoteError('malformed_response', 'Jira returned invalid workflow status metadata')
+        return {'id': native_id(value.get('id')), 'name': value['name']}
+
+    def _issue_status(self, key, project):
+        issue_id, fields = self._issue(key, project, 'project,status')
+        return issue_id, self._status(fields.get('status'))
+
+    def _available_transitions(self, key, project):
+        issue_id, current = self._issue_status(key, project)
+        endpoint = f'/rest/api/3/issue/{issue_id}/transitions'
+        _, response = self._request('GET', endpoint)
+        rows = response.get('transitions')
+        if not isinstance(rows, list):
+            raise RemoteError('malformed_response', 'Jira returned invalid workflow transitions')
+        transitions = {}
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get('name'), str):
+                raise RemoteError('malformed_response', 'Jira returned an invalid workflow transition')
+            if row.get('isAvailable') is False:
+                continue
+            transition_id = native_id(row.get('id'))
+            if transition_id in transitions:
+                raise RemoteError('malformed_response', 'Jira returned duplicate workflow transition IDs')
+            transitions[transition_id] = dict(id=transition_id, name=row['name'], to=self._status(row.get('to')))
+        if self._issue_status(key, project) != (issue_id, current):
+            raise RemoteError('jira_status_changed', 'The issue or status changed; list transitions again')
+        return issue_id, current, transitions
+
+    def _transition_issue(self, key, project, transition_id, from_status_id, target_status_id):
+        issue_id, current, transitions = self._available_transitions(key, project)
+        if current['id'] != from_status_id:
+            raise RemoteError('jira_status_changed', 'The current status differs from fromStatusId; list transitions again')
+        selected = transitions.get(transition_id)
+        if selected is None:
+            raise RemoteError('jira_transition_unavailable', 'Choose a currently available transition ID')
+        target = selected['to']
+        if target['id'] != target_status_id:
+            raise RemoteError('jira_transition_destination_changed', 'The transition destination changed; list transitions again')
+        if target['id'] == current['id']:
+            raise RemoteError('jira_already_in_status', 'The issue is already in the transition destination status')
+        unknown = dict(status='unknown', code='jira_transition_unverified', key=key, targetStatus=target,
+                       next='Read this issue to verify its current status before taking any further action.')
+        try:
+            self._request('POST', f'/rest/api/3/issue/{issue_id}/transitions',
+                          {'transition': {'id': transition_id}}, allow_no_content=True)
+        except RemoteError as error:
+            if error.outcome_unknown:
+                return unknown
+            raise
+        try:
+            saved_id, saved = self._issue_status(key, project)
+            if saved_id == issue_id and saved['id'] == target['id']:
+                return dict(status='transitioned', key=key, previousStatus=current, currentStatus=saved,
+                            transitionId=transition_id, url=self._issue_url(key))
+        except RemoteError:
+            pass
+        return unknown
+
+    @staticmethod
     def _unknown(key, comment_id=None):
         return dict(status='unknown', code='jira_comment_unverified', key=key, commentId=comment_id,
                     next='Read this issue and its recent comments before any new submission. Do not retry automatically.')
@@ -95,10 +156,16 @@ class Jira(Remote):
         if project not in self.projects:
             return dict(status='error', code='jira_project_not_configured', message='Select an issue in a configured Jira project')
         try:
-            with self.operation(max_requests=4, max_response_bytes=1024 * 1024, timeout=25):
+            with self.operation(max_requests=5, max_response_bytes=1024 * 1024, timeout=25):
                 if operation == 'get_jira_issue':
                     return self._get_issue(key, project, data['includeComments'])
-                return self._add_comment(key, project, data['text'])
+                if operation == 'add_jira_comment':
+                    return self._add_comment(key, project, data['text'])
+                if operation == 'list_jira_transitions':
+                    _, current, transitions = self._available_transitions(key, project)
+                    return dict(status='read', key=key, currentStatus=current, transitions=list(transitions.values()))
+                return self._transition_issue(key, project, native_id(data['transitionId']),
+                                              native_id(data['fromStatusId']), native_id(data['targetStatusId']))
         except RemoteError as error:
             if error.outcome_unknown:
                 return self._unknown(key)

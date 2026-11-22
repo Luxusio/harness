@@ -98,12 +98,23 @@ JIRA_TOOLS = [
          'On an unknown outcome, inspect recent comments with get_jira_issue before considering a retry.', {
              'issue': field(S, 'Exact Jira issue key'), 'text': field(S, 'Plain text, up to 10,000 characters'),
          }, ['issue', 'text']),
+    tool('list_jira_transitions', 'Read the current Jira status and available native workflow transitions for an exact issue.', {
+        'issue': field(S, 'Exact Jira issue key'),
+    }, ['issue']),
+    tool('transition_jira_issue', 'After authorization, apply a transition returned by list_jira_transitions, '
+         'then verify the resulting status. On an unknown result, read the issue; do not retry automatically.', {
+             'issue': field(S, 'Exact Jira issue key'),
+             'transitionId': field(S, 'Transition ID from list_jira_transitions'),
+             'fromStatusId': field(S, 'Current status ID from list_jira_transitions'),
+             'targetStatusId': field(S, 'Destination status ID from the chosen transition'),
+         }, ['issue', 'transitionId', 'fromStatusId', 'targetStatusId']),
 ]
 for item in JIRA_TOOLS:
     item['inputSchema']['properties']['connection'] = {
         'type': 'string', 'enum': ['project'], 'description': 'Use the configured project connection.'}
-    item['annotations'] = {'readOnlyHint': item['name'] == 'get_jira_issue',
-                           'destructiveHint': False, 'idempotentHint': item['name'] == 'get_jira_issue'}
+    read = item['name'] in ('get_jira_issue', 'list_jira_transitions')
+    item['annotations'] = {'readOnlyHint': read, 'destructiveHint': item['name'] == 'transition_jira_issue',
+                           'idempotentHint': read}
 JIRA_TOOL_NAMES = frozenset(item['name'] for item in JIRA_TOOLS)
 SCHEMAS.update((item['name'], item) for item in JIRA_TOOLS)
 

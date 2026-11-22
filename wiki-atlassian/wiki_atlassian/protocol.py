@@ -19,7 +19,8 @@ from .tools import JIRA_TOOLS, JIRA_TOOL_NAMES, REVIEW_TOOLS, WIKI_TOOLS, valida
 
 MAX_LINE = 1024 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024
-MUTATIONS = frozenset(('create_document', 'update_document', 'create_comment', 'update_comment', 'add_jira_comment'))
+MUTATIONS = frozenset(('create_document', 'update_document', 'create_comment', 'update_comment',
+                       'add_jira_comment', 'transition_jira_issue'))
 RECEIPT_LIMIT = 64
 
 
@@ -259,8 +260,9 @@ class Server:
                 instructions += (' For a returned documentReview, use its operation_status receipt in this same '
                                  'session and report the finished review outcome.')
             if self.jira is not None:
-                instructions += (' For configured Jira projects use get_jira_issue and add_jira_comment '
-                                 'on this project connection. Inspect uncertain writes before retrying.')
+                instructions += (' For configured Jira projects use get_jira_issue, add_jira_comment, '
+                                 'list_jira_transitions and transition_jira_issue on this project connection. '
+                                 'Inspect uncertain writes before retrying.')
             return self.result(id, {'protocolVersion': '2024-11-05', 'serverInfo': {'name': 'atlassian', 'version': __version__},
                                     'capabilities': {'tools': {}}, 'instructions': instructions})
         if method == 'ping':

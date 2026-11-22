@@ -169,7 +169,7 @@ class Remote:
     def _endpoint(self, path, params=None):
         return self._url(path) + ('?' + urlencode(params) if params else '')
 
-    def _request(self, method, target, payload=None):
+    def _request(self, method, target, payload=None, *, allow_no_content=False):
         target = self._url(target)
         budget = _budget.get()
         if budget:
@@ -216,6 +216,8 @@ class Remote:
                 raise RemoteError('wiki_timeout', 'Operation exceeded its aggregate deadline', mutating)
         if len(raw) > MAX_BODY:
             raise RemoteError('response_limit', f'{self.product} response exceeds the size limit', mutating)
+        if allow_no_content and status == 204 and not raw:
+            return {str(k).lower(): v for k, v in response_headers.items()}, {}
         def unique(pairs):
             result = {}
             for key, value in pairs:

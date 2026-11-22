@@ -2,7 +2,7 @@
 
 Standalone business knowledge and document management extracted from Talos.
 Harness remains the development controller. This plugin registers a service-named
-`atlassian` MCP. Jira issue lookup and comments are available for explicitly
+`atlassian` MCP. Jira issue lookup, comments and status changes are available for explicitly
 configured projects. Ordinary document operations do not require WBS, Jira or repository-local
 document copies. Connection selection uses the existing Harness project settings.
 
@@ -102,19 +102,25 @@ start Java to parse settings.
 The current backend implements Confluence documents, native comments and
 history.
 
-## Jira issues and comments
+## Jira issues, comments and status
 
 Add `jiraProjects: [TEAM]` under the existing `wiki:` block in
 `doc/harness/manifest.yaml`, replacing `TEAM` with the project's Jira key.
 Restart the MCP session after changing the list. Jira uses the same site and
 project credentials as the existing wiki connection. The Jira account needs
-Browse Projects and, to post a comment, Add Comments.
+Browse Projects. Posting a comment requires Add Comments, and changing status
+requires Transition Issues.
 
 - `get_jira_issue` takes an exact issue key, such as `{"issue": "TEAM-123"}`.
   Set `includeComments: true` to include up to ten recent visible comments.
 - `add_jira_comment` takes the issue key and plain `text`. It returns the
   verified comment ID and link. If the outcome is unknown, read the issue's
   recent comments before considering another submission.
+- `list_jira_transitions` returns the current status and available workflow
+  transitions. Use `transition_jira_issue` with the issue key, the transition ID,
+  the current status ID as `fromStatusId`, and the intended `targetStatusId`.
+  It verifies the saved status after the transition. If Jira requires fields
+  beyond the status change, use the Jira interface to complete the workflow.
 
 Jira tools are available on the project connection. Personal inboxes and
 restricted document-review sessions keep their existing document toolsets.
