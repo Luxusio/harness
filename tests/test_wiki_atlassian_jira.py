@@ -3,18 +3,22 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 from urllib.parse import parse_qs, urlsplit
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as error:
+    if error.name != 'pytest':
+        raise
+    from unittest import SkipTest
+    raise SkipTest('pytest is required to collect this module') from error
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / 'wiki-atlassian'), str(ROOT / 'plugin/scripts')]
 
-from document_destination import _validate_config
-from wiki_atlassian.jira import Jira
-from wiki_atlassian.models import Credentials
-from wiki_atlassian.protocol import Server
+@pytest.fixture(autouse=True)
+def jira_import_paths(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / 'wiki-atlassian'))
+    monkeypatch.syspath_prepend(str(ROOT / 'plugin/scripts'))
 
 
 def call(server, tool, **args):
@@ -72,6 +76,10 @@ class JiraTransport:
 
 
 def fixture():
+    from wiki_atlassian.jira import Jira
+    from wiki_atlassian.models import Credentials
+    from wiki_atlassian.protocol import Server
+
     native = JiraTransport()
     jira = Jira(Credentials('https://test.example.invalid', 'owner@example.invalid', 'test-project-token'),
                 ['CAT'], native)
@@ -79,6 +87,8 @@ def fixture():
 
 
 def test_jira_tools_require_project_scope_and_never_appear_for_reviewer():
+    from wiki_atlassian.protocol import Server
+
     server, native = fixture()
     assert call(Server(), 'get_jira_issue', issue='CAT-209')['code'] == -32602
     restricted = Server(jira=server.jira, reviewer=True)
@@ -132,6 +142,8 @@ def test_failed_comment_is_never_retried(post_status, readback_status, status, c
 
 @pytest.mark.parametrize('selection', ['CAT', ['CAT', 'CAT'], ['cat'], ['../CAT'], ['CAT', 12]])
 def test_jira_project_config_is_explicit_and_validated(selection):
+    from document_destination import _validate_config
+
     base = {'enabled': True, 'site': 'https://test.example.invalid', 'spaces': [{'key': 'SD'}]}
     assert 'jiraProjects' not in _validate_config(base)
     assert _validate_config({**base, 'jiraProjects': ['CAT']})['jiraProjects'] == ['CAT']
@@ -162,6 +174,8 @@ def test_jira_discovers_transition_and_verifies_native_204():
     ('CAT-209', 'project', '31', '10003', 'jira_transition_destination_changed'),
 ])
 def test_jira_transition_rejects_wrong_scope_or_destination(issue, connection, transition, target, code):
+    from wiki_atlassian.protocol import Server
+
     server, native = fixture()
     args = dict(issue=issue, connection=connection, transitionId=transition, fromStatusId='10001', targetStatusId=target)
     assert call(server, 'transition_jira_issue', **args)['code'] == code
