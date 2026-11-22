@@ -301,14 +301,17 @@ def test_invalid_connection_exposes_pending_not_local_writing(tmp_path):
     assert "local-recipe-sentinel" not in result.stdout
 
 
-@pytest.mark.parametrize("state", ["missing", "disabled", "external", "invalid"])
+@pytest.mark.parametrize("state", ["missing", "disabled", "external", "invalid", "private", "no-auth"])
 def test_actual_session_banner_uses_payload_destination(tmp_path, state):
     project = harness_project(tmp_path / "project")
     if state != "missing":
         write_config(project, config(enabled=state != "disabled", site="broken" if state == "invalid" else "https://example.invalid"))
+    if state == "private":
+        (project / "mise.local.toml").write_text("private-file-check-only")
+    env = clean_env(tmp_path / "home", {} if state in ("private", "no-auth") else connection())
     unrelated = harness_project(tmp_path / "process")
     result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "hook_session_start.py"), "--claude-banner"],
-                            cwd=unrelated, env=clean_env(tmp_path / "home", connection()), input=json.dumps({"cwd": str(project)}),
+                            cwd=unrelated, env=env, input=json.dumps({"cwd": str(project)}),
                             text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert "harness — ready" in result.stdout
@@ -317,7 +320,13 @@ def test_actual_session_banner_uses_payload_destination(tmp_path, state):
         assert "atlassian MCP" not in result.stdout
     else:
         assert "REQ: capture requirements as doc/" not in result.stdout
-        assert ("atlassian MCP" if state == "external" else "business-document writes remain pending") in result.stdout
+        assert ("atlassian MCP" if state in ("external", "private") else "business-document writes remain pending") in result.stdout
+    if state == "private":
+        assert "pending or busy means synchronization has not finished" in result.stdout
+        assert "connection is unavailable" not in result.stdout
+        assert "private-file-check-only" not in result.stdout
+    if state == "no-auth":
+        assert "supply matching Atlassian authentication" in result.stdout
 
 
 def test_external_req_gate_uses_explicit_repo_root(tmp_path, monkeypatch):

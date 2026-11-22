@@ -259,6 +259,10 @@ class Server:
             elif self._codex_review is not None:
                 instructions += (' For a returned documentReview, use its operation_status receipt in this same '
                                  'session and report the finished review outcome.')
+            if not self.reviewer and self.documents is not None:
+                instructions += (' In connection_status, pending or busy means synchronization has not finished; '
+                                 'report that progress and check again before calling the connection unavailable. '
+                                 'For failed or unavailable, report the returned connection or space error.')
             if self.jira is not None:
                 instructions += (' For configured Jira projects use get_jira_issue, add_jira_comment, '
                                  'list_jira_transitions and transition_jira_issue on this project connection. '

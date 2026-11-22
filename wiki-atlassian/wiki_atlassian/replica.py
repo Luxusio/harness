@@ -537,7 +537,11 @@ class Replica:
                 'replica_missing', 'replica_recovery_pending', 'replica_incomplete', 'credential_reauthorization_pending') else 'unavailable'
             result = dict(enabled=True, ready=False, status=status, reason='replica_scope_denied' if reason == 'root_scope_denied' else reason,
                           code=failure or reason, syncError=self._failure_message(failure) if failure else None,
-                          message='No complete readable snapshot is available; check synchronization and connection configuration')
+                          message=(
+                              'Synchronization has not finished; retry after the replica is ready'
+                              if status in ('pending', 'busy') else
+                              'No readable snapshot is available; inspect the connection error'
+                          ))
             if reason == 'root_scope_denied' and self.settings.watched_comment_pages:
                 result['commentWatch'] = 'unavailable'
             result['syncProgress'] = self._progress_status()

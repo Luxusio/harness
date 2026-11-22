@@ -229,7 +229,9 @@ def render_notice(data, runtime, environment=None):
         return ""
     try:
         destination = select_destination(env, cwd=data.get("cwd"))
-        if destination["mode"] != "external":
+        # The notice feed is admitted using the inherited caller tuple.
+        # A private project file belongs to the MCP, not to this hook.
+        if destination.get("authSource") != "environment":
             return ""
         config = destination["config"]
         key = hashlib.sha256((runtime + "\0" + sid).encode()).hexdigest()

@@ -36,6 +36,44 @@ sys.path.insert(0, str(ROOT / 'plugin/scripts'))
 pytestmark = pytest.mark.usefixtures("selected_packaged_python")
 
 
+def test_reports_startup_pending_and_preserves_sync_failures(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.syspath_prepend(str(PLUGIN))
+    from wiki_atlassian.config import Project
+    from wiki_atlassian.models import Credentials, RemoteError
+    from wiki_atlassian.multispace import MultiSpaceKnowledge
+
+    site = 'https://fixture.invalid'
+    project = Project({'enabled': True, 'site': site, 'spaces': [{'key': 'TEAM'}]},
+                      Credentials(site, 'test@fixture.invalid', 'test-token'), tmp_path)
+    knowledge = MultiSpaceKnowledge(project, None, start_workers=False)
+    status = knowledge.status()
+    assert status['status'] == 'pending'
+    assert status['spaces'][0]['message'] == 'Initial synchronization has not finished'
+    pending_search = knowledge._search({'query': 'fixture'}, 'TEAM')
+    assert pending_search['code'] == 'space_pending' and pending_search['spaces'][0]['status'] == 'pending'
+    with pytest.raises(RemoteError, match='Initial synchronization has not finished') as exc:
+        knowledge._running('TEAM')
+    assert exc.value.code == 'space_pending'
+
+    slot = knowledge.slots['TEAM']
+    slot.failure = 'http_403'
+    status = knowledge.status()
+    assert status['status'] == 'failed' and not status['ready']
+    assert status['spaces'][0]['code'] == 'http_403'
+    assert 'failed' in status['spaces'][0]['message']
+    failed_search = knowledge._search({'query': 'fixture'}, 'TEAM')
+    assert failed_search['code'] == 'http_403' and failed_search['spaces'][0]['status'] == 'failed'
+    with pytest.raises(RemoteError, match='Automatic synchronization for this space failed') as exc:
+        knowledge._running('TEAM')
+    assert exc.value.code == 'http_403'
+
+    slot.failure = None
+    slot.replica = SimpleNamespace(status=lambda: {'status': 'unavailable', 'ready': False})
+    assert knowledge.status()['status'] == 'unavailable'
+
+
 @pytest.fixture
 def selected_packaged_python(monkeypatch):
     # These subprocesses execute the intact test interpreter, never a copied

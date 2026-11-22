@@ -181,31 +181,53 @@ class MultiSpaceKnowledge:
             if slot.replica is not None:
                 slot.replica.close()
 
+    @staticmethod
+    def _space_status(slot):
+        current = slot.replica.status() if slot.replica else {
+            'status': 'pending', 'ready': False, 'code': 'space_pending',
+            'message': 'Initial synchronization has not finished'}
+        if slot.failure:
+            current.update(status='failed', code=slot.failure, message='Automatic synchronization for this space failed',
+                           syncError='Automatic synchronization for this space failed')
+            if slot.failure == 'replica_denial_pending':
+                current.update(authorizationDenied=True, scopeFence='pending', scopeFenceCode='replica_denial_pending')
+        if slot.denied:
+            current['ready'] = False
+            if not slot.failure:
+                current.update(status='unavailable', code='space_unavailable', message='The selected space is no longer admitted')
+        return current
+
     def status(self):
         entries = []
         for key, slot in self.slots.items():
-            current = slot.replica.status() if slot.replica else {'status': 'pending', 'ready': False}
+            current = self._space_status(slot)
             row = {**slot.selection, **current, 'key': key, 'wholeSpace': 'rootPageId' not in slot.selection}
             if slot.settings:
                 row['spaceId'] = slot.settings.space_id
-            if slot.failure:
-                row.update(status='failed', code=slot.failure, syncError='Automatic synchronization for this space failed')
-                if slot.failure == 'replica_denial_pending':
-                    row.update(authorizationDenied=True, scopeFence='pending', scopeFenceCode='replica_denial_pending')
-            if slot.denied:
-                row['ready'] = False
             entries.append(row)
         ready = sum(row.get('ready') is True for row in entries)
         healthy = sum(row.get('ready') is True and row.get('status') == 'ready' for row in entries)
+        if healthy == len(entries):
+            status = 'ready'
+        elif ready:
+            status = 'partial'
+        elif any(row['status'] == 'failed' for row in entries):
+            status = 'failed'
+        elif any(row['status'] in ('pending', 'busy') for row in entries):
+            status = 'pending'
+        else:
+            status = 'unavailable'
         return dict(enabled=True, site=self.project.credentials.base_url, ready=ready > 0, complete=healthy == len(entries),
-                    status='ready' if healthy == len(entries) else 'partial' if ready else 'failed' if any(row.get('status') == 'failed' for row in entries) else 'pending', spaces=entries)
+                    status=status, spaces=entries)
 
     def _running(self, key):
         slot = self.slots[key]
         if slot.denied:
             raise RemoteError('space_unavailable', 'The selected space is no longer admitted')
         if slot.service is None:
-            raise RemoteError('space_pending', 'The selected space is still resolving; inspect connection_status')
+            if slot.failure:
+                raise RemoteError(slot.failure, 'Automatic synchronization for this space failed; inspect connection_status')
+            raise RemoteError('space_pending', 'Initial synchronization has not finished; inspect connection_status')
         return slot
 
     def _id(self, value):
@@ -351,13 +373,13 @@ class MultiSpaceKnowledge:
         more = False
         for key in keys:
             slot = self.slots[key]
-            if snapshots[key] is None:
-                coverage.append(dict(space=key, status='unavailable', readable=False, code=slot.failure or 'replica_pending'))
+            status = self._space_status(slot)
+            if snapshots[key] is None or not status['ready']:
+                coverage.append(dict(space=key, status='pending' if status['ready'] else status['status'],
+                                     readable=False, code=status.get('code', 'replica_pending')))
                 continue
-            status = slot.replica.status()
-            readable = not slot.denied and status.get('ready') is not False
-            coverage.append(dict(space=key, status='ready' if readable and not slot.failure and status.get('status') == 'ready' else 'stale' if readable else 'unavailable',
-                                 readable=readable, freshness=status.get('freshness')))
+            coverage.append(dict(space=key, status='ready' if status['status'] == 'ready' else 'stale',
+                                 readable=True, freshness=status.get('freshness')))
             state = states.get(key, {})
             require(type(state) is dict and not set(state) - {'cursor', 'skip', 'done'}, 'invalid_cursor')
             require('done' not in state or type(state['done']) is bool, 'invalid_cursor')
@@ -372,7 +394,10 @@ class MultiSpaceKnowledge:
                 request['cursor'] = state['cursor']
             response = slot.replica.search(request)
             if response.get('status') == 'error':
-                coverage[-1].update(status='unavailable', readable=False, code=response.get('code'))
+                code = response.get('code')
+                status_name = 'busy' if code == 'replica_busy' else self._space_status(slot)['status']
+                coverage[-1].update(status=status_name if status_name != 'ready' else 'unavailable',
+                                    readable=False, code=code)
                 continue
             hits = response['results']
             skip = state.get('skip', 0)
@@ -396,5 +421,10 @@ class MultiSpaceKnowledge:
         if more:
             response['nextCursor'] = encode_cursor(binding, states)
         if not any(row['readable'] for row in coverage):
-            response.update(status='error', code='replica_unavailable', message='No selected space has a readable replica; inspect connection_status')
+            if any(row['status'] in ('pending', 'busy') for row in coverage):
+                response.update(status='error', code='space_pending', message='Synchronization has not finished; inspect connection_status')
+            else:
+                code = coverage[0].get('code') if len(coverage) == 1 else None
+                response.update(status='error', code=code or 'replica_unavailable',
+                                message='No selected space has a readable replica; inspect connection_status')
         return response

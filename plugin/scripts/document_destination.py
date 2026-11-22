@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select document policy from project YAML and private injected authentication.
+"""Select document policy without probing the wiki MCP's runtime connection.
 
 Read-only: no mise parsing, network requests, package installation or state.
 """
@@ -23,9 +23,17 @@ REMOTE_NOTICE = (
     "[harness-doc-gate] Business knowledge: search/read/update with atlassian MCP. "
     "Keep WBS, runtime instructions and product assets in the repository."
 )
+MCP_STARTUP_NOTICE = (
+    " The configured wiki MCP checks authentication and synchronization on startup. "
+    "Use connection_status for live readiness; pending or busy means synchronization has not finished."
+)
 UNAVAILABLE_NOTICE = (
-    "[harness-doc-gate] Configured knowledge connection is unavailable: repair its "
-    "configuration; business-document writes remain pending."
+    "[harness-doc-gate] Configured knowledge connection is unavailable: "
+    "project wiki settings could not be read or are invalid; business-document writes remain pending."
+)
+AUTH_UNAVAILABLE_NOTICE = (
+    "[harness-doc-gate] Configured knowledge connection is unavailable: "
+    "supply matching Atlassian authentication for this project; business-document writes remain pending."
 )
 
 CONFIG_PARTS = ("doc", "harness", "manifest.yaml")
@@ -214,22 +222,36 @@ def select_destination(environment=None, cwd=None):
     """Select for the consuming cwd; old WIKI connection variables are ignored."""
     environment = os.environ if environment is None else environment
     try:
-        config = _read_config(cwd)
+        root = _project_root(cwd)
+        config = _read_config(root)
         if config is None:
             return {"mode": "local", "notice": LOCAL_NOTICE}
         config = _validate_config(config)
         if not config["enabled"]:
             return {"mode": "local", "notice": LOCAL_NOTICE}
-        for key in ("ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN"):
-            value = environment.get(key)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError("missing credential")
-        if _origin(environment.get("ATLASSIAN_BASE_URL")) != _origin(config["site"]):
-            raise ValueError("credential origin mismatch")
-        return {"mode": "external", "backend": "atlassian", "notice": REMOTE_NOTICE, "config": config}
     except (OSError, ValueError, TypeError, ImportError, RecursionError):
         # Never render exception text: parser diagnostics can contain YAML values.
         return {"mode": "unavailable", "backend": "atlassian", "notice": UNAVAILABLE_NOTICE}
+
+    selected = {"mode": "external", "backend": "atlassian", "notice": REMOTE_NOTICE, "config": config}
+    try:
+        if all(isinstance(environment.get(key), str) and environment[key].strip()
+               for key in ("ATLASSIAN_EMAIL", "ATLASSIAN_API_TOKEN")):
+            if _origin(environment.get("ATLASSIAN_BASE_URL")) == _origin(config["site"]):
+                return {**selected, "authSource": "environment"}
+    except (ValueError, TypeError):
+        pass
+    try:
+        # Missing hook variables do not rule out the MCP's private mise file.
+        # Its launcher owns credential evaluation and runtime readiness.
+        private = (root / "mise.local.toml").lstat()
+    except OSError:
+        pass
+    else:
+        reparse = getattr(private, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        if stat.S_ISREG(private.st_mode) and not reparse:
+            return {**selected, "notice": REMOTE_NOTICE + MCP_STARTUP_NOTICE, "authSource": "project_file"}
+    return {"mode": "unavailable", "backend": "atlassian", "notice": AUTH_UNAVAILABLE_NOTICE}
 
 
 def policy(environment=None, cwd=None):

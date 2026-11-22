@@ -179,6 +179,12 @@ admitted snapshot. The publication transaction is exclusive. Normal writes
 update the existing replica without another refresh call. A remote success
 with local failure is distinct from a failed or uncertain remote write.
 
+Use `connection_status` for live readiness. A space marked `pending` or
+`busy` has synchronization work to finish; a failed space reports the error
+separately. The Harness startup hook can recognize a project with a private
+`mise.local.toml` even when the host shell provides no Atlassian variables.
+The wiki MCP handles authentication and synchronization for that file.
+
 Create a page or submit a versioned content update with `format: "markdown"`
 to publish headings, tables, links, block quotes and fenced code in one
 Confluence version. Fences become native code macros. Raw HTML in Markdown
