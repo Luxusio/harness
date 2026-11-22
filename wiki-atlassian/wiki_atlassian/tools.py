@@ -88,6 +88,25 @@ WIKI_TOOLS = [
 ]
 SCHEMAS = {item['name']: item for item in WIKI_TOOLS}
 
+JIRA_TOOLS = [
+    tool('get_jira_issue', 'Read an exact Jira issue in a configured project. '
+         'Set includeComments to read up to ten recent visible comments.', {
+             'issue': field(S, 'Exact Jira issue key, for example TEAM-123'),
+             'includeComments': field(B, default=False),
+         }, ['issue']),
+    tool('add_jira_comment', 'After authorization, add one plain-text comment to an exact Jira issue. '
+         'On an unknown outcome, inspect recent comments with get_jira_issue before considering a retry.', {
+             'issue': field(S, 'Exact Jira issue key'), 'text': field(S, 'Plain text, up to 10,000 characters'),
+         }, ['issue', 'text']),
+]
+for item in JIRA_TOOLS:
+    item['inputSchema']['properties']['connection'] = {
+        'type': 'string', 'enum': ['project'], 'description': 'Use the configured project connection.'}
+    item['annotations'] = {'readOnlyHint': item['name'] == 'get_jira_issue',
+                           'destructiveHint': False, 'idempotentHint': item['name'] == 'get_jira_issue'}
+JIRA_TOOL_NAMES = frozenset(item['name'] for item in JIRA_TOOLS)
+SCHEMAS.update((item['name'], item) for item in JIRA_TOOLS)
+
 
 def validate_arguments(name, arguments):
     if name not in SCHEMAS:

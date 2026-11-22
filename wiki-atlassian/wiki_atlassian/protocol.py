@@ -14,12 +14,12 @@ import uuid
 from . import __version__
 from .models import RemoteError, compact_json
 from .policy import reject_secrets
-from .tools import REVIEW_TOOLS, WIKI_TOOLS, validate_arguments
+from .tools import JIRA_TOOLS, JIRA_TOOL_NAMES, REVIEW_TOOLS, WIKI_TOOLS, validate_arguments
 
 
 MAX_LINE = 1024 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024
-MUTATIONS = frozenset(('create_document', 'update_document', 'create_comment', 'update_comment'))
+MUTATIONS = frozenset(('create_document', 'update_document', 'create_comment', 'update_comment', 'add_jira_comment'))
 RECEIPT_LIMIT = 64
 
 
@@ -28,14 +28,18 @@ def valid_id(value):
 
 
 class Server:
-    def __init__(self, documents=None, personal=None, project_unavailable=False, *, reviewer=False, codex_review=None):
+    def __init__(self, documents=None, personal=None, project_unavailable=False, *, reviewer=False, codex_review=None,
+                 jira=None):
         self.documents, self.personal = documents, None if reviewer else personal
         self.reviewer = reviewer
+        self.jira = None if reviewer else jira
         self.project_unavailable = project_unavailable
         self.tools = ([*WIKI_TOOLS] if documents is not None or personal is not None
                       else [WIKI_TOOLS[0]] if project_unavailable else [])
         if reviewer:
             self.tools = [tool for tool in self.tools if documents is not None and tool['name'] in REVIEW_TOOLS]
+        if self.jira is not None:
+            self.tools.extend(JIRA_TOOLS)
         self._receipts = {}
         self._receipt_lock = threading.Condition()
         self._submit_update = None
@@ -68,7 +72,9 @@ class Server:
                     'configured': False, 'status': 'unavailable' if self.project_unavailable else 'unconfigured'},
                 'personal': {'configured': self.personal is not None, 'authentication': 'not_checked'}}}
         connection = connection or 'project'
-        if connection == 'personal' and self.personal is not None:
+        if name in JIRA_TOOL_NAMES:
+            value = self.jira.execute(name, args)
+        elif connection == 'personal' and self.personal is not None:
             value = self.personal(name, args)
         elif connection == 'project' and self.documents is not None:
             value = self.documents.execute(name, args)
@@ -252,6 +258,9 @@ class Server:
             elif self._codex_review is not None:
                 instructions += (' For a returned documentReview, use its operation_status receipt in this same '
                                  'session and report the finished review outcome.')
+            if self.jira is not None:
+                instructions += (' For configured Jira projects use get_jira_issue and add_jira_comment '
+                                 'on this project connection. Inspect uncertain writes before retrying.')
             return self.result(id, {'protocolVersion': '2024-11-05', 'serverInfo': {'name': 'atlassian', 'version': __version__},
                                     'capabilities': {'tools': {}}, 'instructions': instructions})
         if method == 'ping':

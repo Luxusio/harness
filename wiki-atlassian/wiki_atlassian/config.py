@@ -137,6 +137,10 @@ class Project:
     def selections(self):
         return copy.deepcopy(self._config['spaces'])
 
+    @property
+    def jira_projects(self):
+        return tuple(self._config.get('jiraProjects', ()))
+
     def read(self):
         return copy.deepcopy(self._config)
 

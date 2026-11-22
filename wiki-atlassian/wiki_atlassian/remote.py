@@ -110,6 +110,10 @@ _budget = ContextVar('wiki_remote_budget', default=None)
 
 
 class Remote:
+    product = 'Confluence'
+    api_paths = ('/wiki/api/v2/', '/wiki/rest/api/')
+    wiki_aliases = ('/api/v2/', '/rest/api/')
+
     def __init__(self, credentials: Credentials, transport=None, *, ssl_context=None):
         self.credentials = credentials
         self.origin = _origin(credentials.base_url)
@@ -148,14 +152,14 @@ class Remote:
                   'invalid_next', 'Native API paths must already be normalized')
         except ValueError:
             raise RemoteError('invalid_next', 'Invalid native API URL') from None
-        if value.startswith('/api/v2/') or value.startswith('/rest/api/'):
+        if value.startswith(self.wiki_aliases):
             value = '/wiki' + value
         candidate = urljoin(base or self.origin, value)
         try:
             uri, expected = urlsplit(candidate), urlsplit(self.origin)
             _need((uri.scheme, uri.hostname, uri.port) == (expected.scheme, expected.hostname, expected.port) and
                   uri.username is None and uri.password is None and not uri.fragment and
-                  uri.path.startswith(('/wiki/api/v2/', '/wiki/rest/api/')) and '%' not in uri.path and
+                  uri.path.startswith(self.api_paths) and '%' not in uri.path and
                   not any(p in ('.', '..') for p in uri.path.split('/')),
                   'invalid_next', 'Native request must remain inside the configured API origin')
         except ValueError:
@@ -203,7 +207,7 @@ class Remote:
                     # The received native status is authoritative even when its
                     # optional diagnostics consume the final budget bytes.
                     within_budget = False
-            raise RemoteError('http_' + str(status), 'Confluence request failed (HTTP ' + str(status) + ')',
+            raise RemoteError('http_' + str(status), f'{self.product} request failed (HTTP {status})',
                               mutating and status >= 500, self._error_details(raw) if within_budget else {},
                               'Inspect native content and history using read-only tools; do not automatically repeat the write.' if mutating and status >= 500 else None)
         if budget:
@@ -211,7 +215,7 @@ class Remote:
             if time.monotonic() >= budget.deadline:
                 raise RemoteError('wiki_timeout', 'Operation exceeded its aggregate deadline', mutating)
         if len(raw) > MAX_BODY:
-            raise RemoteError('response_limit', 'Confluence response exceeds the size limit', mutating)
+            raise RemoteError('response_limit', f'{self.product} response exceeds the size limit', mutating)
         def unique(pairs):
             result = {}
             for key, value in pairs:
@@ -227,7 +231,7 @@ class Remote:
             # otherwise valid UTF-8 envelope; those cannot enter native strings.
             compact_json(result).encode('utf-8')
         except (ValueError, UnicodeError, RecursionError):
-            raise RemoteError('malformed_response', 'Confluence returned invalid JSON', mutating) from None
+            raise RemoteError('malformed_response', f'{self.product} returned invalid JSON', mutating) from None
         return {str(k).lower(): v for k, v in response_headers.items()}, result
 
     def _resolve(self, host, port, deadline):

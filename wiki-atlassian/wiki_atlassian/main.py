@@ -183,15 +183,19 @@ def _serve(args):
             if registered_digest(args.project_root, args.reviewer_project_id, project) != args.codex_review_binding:
                 sys.stderr.write('The Codex reviewer project registration changed before connection\n')
                 return 1
+        jira = None
         if project is not None:
             from .remote import Remote
             from .multispace import MultiSpaceKnowledge
             documents = MultiSpaceKnowledge(project, Remote(project.credentials))
+            if project.jira_projects and not args.reviewer:
+                from .jira import Jira
+                jira = Jira(project.credentials, project.jira_projects)
         review = None
         if args.codex_host and project is not None:
             from .codex_registration import reviewer_for
             review = reviewer_for(args.project_root, project)
-        Server(documents, personal, unavailable, reviewer=args.reviewer, codex_review=review).run()
+        Server(documents, personal, unavailable, reviewer=args.reviewer, codex_review=review, jira=jira).run()
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
         if documents is not None:

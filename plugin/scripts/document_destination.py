@@ -30,7 +30,8 @@ UNAVAILABLE_NOTICE = (
 
 CONFIG_PARTS = ("doc", "harness", "manifest.yaml")
 MAX_CONFIG_BYTES = 64 * 1024
-CONFIG_FIELDS = frozenset(("enabled", "site", "spaces", "pollIntervalSeconds"))
+CONFIG_FIELDS = frozenset(("enabled", "site", "spaces", "pollIntervalSeconds", "jiraProjects"))
+JIRA_PROJECT_KEY = r"[A-Z][A-Z0-9_]{1,31}"
 SPACE_FIELDS = frozenset(("key", "rootPageId", "memoryPageId", "feedbackPageId", "watchCommentPages"))
 MAX_SPACES = 32
 
@@ -175,6 +176,11 @@ def _validate_config(config):
     poll = config.get("pollIntervalSeconds", 300)
     if type(poll) is not int or not 30 <= poll <= 86400:
         raise ValueError("invalid polling interval")
+    jira_projects = config.get("jiraProjects", [])
+    if not isinstance(jira_projects, list) or len(jira_projects) > MAX_SPACES or any(
+        not isinstance(key, str) or not re.fullmatch(JIRA_PROJECT_KEY, key) for key in jira_projects
+    ) or len(set(jira_projects)) != len(jira_projects):
+        raise ValueError("invalid or duplicate Jira project key")
     if "spaces" in config:
         spaces = config["spaces"]
         if not isinstance(spaces, list) or not 1 <= len(spaces) <= MAX_SPACES:

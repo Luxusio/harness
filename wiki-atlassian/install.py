@@ -55,7 +55,7 @@ def _raise_walk(error):
 def _source_files():
     required = ('main', 'models', 'config', 'remote', 'storage', 'markdown', 'replica',
                 'changes', 'search', 'service', 'multispace', 'protocol', 'tools', 'references',
-                'cursors', 'policy', 'codex_registration', 'codex_review')
+                'cursors', 'policy', 'codex_registration', 'codex_review', 'jira')
     if os.name == 'nt':
         from wiki_platform import source_snapshot, trusted_source_directory
         result = {}

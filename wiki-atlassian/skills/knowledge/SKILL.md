@@ -16,6 +16,11 @@ descendants. Never substitute one connection's credentials for another or infer
 permission to publish from successful authentication. An uncertain write must
 be inspected through the same connection before any new submission.
 
+For Jira projects configured in `wiki.jiraProjects`, use `get_jira_issue`
+with an exact key and `add_jira_comment` for authorized comments. The Jira
+tools use the project connection. If a comment's outcome is unknown, inspect
+the issue with `includeComments: true` before considering another submission.
+
 Search for relevant documents, inspect the returned passages and expand the
 necessary sections or source documents. Distinguish missing results from absent
 knowledge; respect freshness, truncation and unavailable scope. Historical and
